@@ -10,6 +10,14 @@
 
 // ===== 설정 =====
 const CONFIG = {
+  // 네이버 검색광고 API 설정
+  NAVER_API: {
+    ACCESS_LICENSE: '01000000007a25c6f02f5f40ab2252dd3712bcebe04647e919809a2348f9fd4d10e7feb348',
+    SECRET_KEY: 'AQAAAAB6JcbwL19AqyJS3TcSvOvgtdSrGzqG+zlrq0GVt6J9Sw==',
+    CUSTOMER_ID: '3526315',
+    BASE_URL: 'https://api.naver.com'
+  },
+
   // 소스 데이터 범위 (A~D열 = 빅데이터)
   SOURCE: {
     HEADER_ROW: 2,       // 헤더 행 (키워드, PC, M, 분류)
@@ -20,10 +28,12 @@ const CONFIG = {
     CATEGORY_COL: 4      // D열: 분류
   },
 
-  // 각 분류 영역은 4열 단위 (키워드, PC, M, 분류)
-  COLS_PER_SECTION: 4,
+  // 각 분류 영역은 5열 단위 (4열 데이터 + 1열 구분자)
+  // 데이터: 키워드, PC, M, 분류 (4열) + 구분자 (1열)
+  COLS_PER_SECTION: 5,
+  DATA_COLS: 4,  // 실제 데이터 열 수
 
-  // 분류 영역 시작 열 (E열 = 5, 하지만 보통 F열 = 6부터 시작)
+  // 분류 영역 시작 열 (F열 = 6부터 시작, E열은 구분자)
   DEST_START_COL: 6,
 
   // 각 섹션의 데이터 시작 행 (3행부터 데이터)
@@ -41,15 +51,16 @@ const CONFIG = {
 
 /**
  * 2행 헤더를 스캔하여 분류 영역을 자동 감지
- * 4열 단위로 마지막 열(분류열)에 있는 값을 분류명으로 인식
+ * 5열 단위 (4열 데이터 + 1열 구분자)로 스캔
+ * 4번째 열(분류열)에 있는 값을 분류명으로 인식
  */
 function detectDestinations(sheet) {
   const headerRow = sheet.getRange(CONFIG.HEADER_SCAN_ROW, 1, 1, CONFIG.MAX_SCAN_COLS).getValues()[0];
   const destinations = {};
 
-  // F열(6)부터 4열 단위로 스캔
+  // F열(6)부터 5열 단위로 스캔 (F-I + J구분자, K-N + O구분자, ...)
   for (let col = CONFIG.DEST_START_COL; col < CONFIG.MAX_SCAN_COLS; col += CONFIG.COLS_PER_SECTION) {
-    const categoryCol = col + CONFIG.COLS_PER_SECTION - 1; // 4번째 열 (분류열)
+    const categoryCol = col + CONFIG.DATA_COLS - 1; // 4번째 열 (분류열): F+3=I, K+3=N, ...
     const categoryName = String(headerRow[categoryCol - 1] || '').trim();
 
     // 분류명이 있고, "분류"라는 일반 텍스트가 아닌 경우
@@ -150,9 +161,10 @@ function groupByCategory(data) {
   // 각 분류별로 M검색량(인덱스 2) 높은순 정렬
   Object.keys(grouped).forEach(category => {
     grouped[category].sort((a, b) => {
-      const mA = typeof a[2] === 'number' ? a[2] : 0;
-      const mB = typeof b[2] === 'number' ? b[2] : 0;
-      return mB - mA; // 내림차순
+      // 문자열/숫자 모두 처리 (쉼표 제거 후 숫자 변환)
+      const mA = parseFloat(String(a[2]).replace(/,/g, '')) || 0;
+      const mB = parseFloat(String(b[2]).replace(/,/g, '')) || 0;
+      return mB - mA; // 내림차순 (높은순)
     });
   });
 
@@ -167,12 +179,12 @@ function distributeData(sheet, groupedData, destinations) {
     const dest = destinations[category];
     const startCol = dest.startCol;
 
-    // 해당 영역 초기화 (4열: 키워드, PC, M, 분류)
+    // 해당 영역 초기화 (DATA_COLS열: 키워드, PC, M, 분류)
     sheet.getRange(
       CONFIG.DEST_START_ROW,
       startCol,
       CONFIG.MAX_ROWS,
-      4
+      CONFIG.DATA_COLS
     ).clearContent();
 
     // 해당 분류 데이터가 있으면 입력
@@ -181,7 +193,7 @@ function distributeData(sheet, groupedData, destinations) {
         CONFIG.DEST_START_ROW,
         startCol,
         groupedData[category].length,
-        4
+        CONFIG.DATA_COLS
       ).setValues(groupedData[category]);
     }
   });
@@ -238,7 +250,13 @@ function showMessage(message) {
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('키워드 도구')
-    .addItem('키워드 분류 실행', '키워드분류')
+    .addItem('키워드 분류 실행 (현재 시트)', '키워드분류')
+    .addItem('키워드 분류 실행 (전체 시트)', '전체시트분류')
+    .addSeparator()
+    .addItem('검색량 조회 (현재 시트)', '검색량조회')
+    .addItem('검색량 조회 (전체 시트)', '전체시트검색량조회')
+    .addItem('검색량 조회 (선택 키워드)', '선택키워드검색량조회')
+    .addSeparator()
     .addItem('분류 목록 확인', '분류목록확인')
     .addItem('설정 확인', '설정확인')
     .addSeparator()
@@ -351,4 +369,359 @@ function columnToLetter(column) {
     column = Math.floor((column - temp - 1) / 26);
   }
   return letter;
+}
+
+// ========================================
+// 네이버 검색광고 API 연동
+// ========================================
+
+/**
+ * 네이버 API 서명 생성
+ */
+function generateSignature(timestamp, method, path) {
+  const message = timestamp + '.' + method + '.' + path;
+  const signature = Utilities.computeHmacSha256Signature(message, CONFIG.NAVER_API.SECRET_KEY);
+  return Utilities.base64Encode(signature);
+}
+
+/**
+ * 네이버 API 호출
+ */
+function callNaverApi(method, path, payload) {
+  const timestamp = String(new Date().getTime());
+  const signature = generateSignature(timestamp, method, path);
+
+  const options = {
+    method: method,
+    headers: {
+      'X-Timestamp': timestamp,
+      'X-API-KEY': CONFIG.NAVER_API.ACCESS_LICENSE,
+      'X-Customer': CONFIG.NAVER_API.CUSTOMER_ID,
+      'X-Signature': signature,
+      'Content-Type': 'application/json'
+    },
+    muteHttpExceptions: true
+  };
+
+  if (payload) {
+    options.payload = JSON.stringify(payload);
+  }
+
+  const url = CONFIG.NAVER_API.BASE_URL + path;
+  const response = UrlFetchApp.fetch(url, options);
+  const responseCode = response.getResponseCode();
+  const responseText = response.getContentText();
+
+  if (responseCode !== 200) {
+    throw new Error('API 오류 (' + responseCode + '): ' + responseText);
+  }
+
+  return JSON.parse(responseText);
+}
+
+/**
+ * 키워드 검색량 조회 (네이버 API)
+ */
+function getKeywordStats(keywords) {
+  if (!keywords || keywords.length === 0) return {};
+
+  // 최대 100개씩 처리
+  const results = {};
+  const chunkSize = 100;
+
+  for (let i = 0; i < keywords.length; i += chunkSize) {
+    const chunk = keywords.slice(i, i + chunkSize);
+    const payload = {
+      hintKeywords: chunk,
+      showDetail: '1'
+    };
+
+    try {
+      const response = callNaverApi('POST', '/keywordstool', payload);
+
+      if (response.keywordList) {
+        response.keywordList.forEach(item => {
+          results[item.relKeyword] = {
+            pc: item.monthlyPcQcCnt === '< 10' ? 0 : parseInt(item.monthlyPcQcCnt) || 0,
+            mobile: item.monthlyMobileQcCnt === '< 10' ? 0 : parseInt(item.monthlyMobileQcCnt) || 0
+          };
+        });
+      }
+    } catch (e) {
+      console.error('API 호출 실패:', e.message);
+    }
+
+    // API 속도 제한 방지
+    if (i + chunkSize < keywords.length) {
+      Utilities.sleep(500);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * A열 키워드의 검색량 자동 조회 (B, C열에 입력)
+ */
+function 검색량조회() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  const ui = SpreadsheetApp.getUi();
+
+  // 확인 메시지
+  const confirm = ui.alert(
+    '검색량 조회',
+    'A열의 키워드 검색량을 네이버 API로 조회합니다.\n' +
+    'B열(PC)과 C열(M)에 검색량이 입력됩니다.\n\n' +
+    '계속하시겠습니까?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirm !== ui.Button.YES) return;
+
+  try {
+    const lastRow = sheet.getLastRow();
+    if (lastRow < CONFIG.SOURCE.START_ROW) {
+      showMessage('조회할 키워드가 없습니다.');
+      return;
+    }
+
+    // A열에서 키워드 가져오기
+    const keywordRange = sheet.getRange(
+      CONFIG.SOURCE.START_ROW,
+      CONFIG.SOURCE.KEYWORD_COL,
+      lastRow - CONFIG.SOURCE.START_ROW + 1,
+      1
+    );
+    const keywordValues = keywordRange.getValues();
+    const keywords = keywordValues.map(row => String(row[0]).trim()).filter(k => k);
+
+    if (keywords.length === 0) {
+      showMessage('조회할 키워드가 없습니다.');
+      return;
+    }
+
+    // 네이버 API로 검색량 조회
+    const stats = getKeywordStats(keywords);
+
+    // B, C열에 검색량 입력
+    let updatedCount = 0;
+    for (let i = 0; i < keywordValues.length; i++) {
+      const keyword = String(keywordValues[i][0]).trim();
+      if (keyword && stats[keyword]) {
+        const row = CONFIG.SOURCE.START_ROW + i;
+        sheet.getRange(row, CONFIG.SOURCE.PC_COL).setValue(stats[keyword].pc);
+        sheet.getRange(row, CONFIG.SOURCE.M_COL).setValue(stats[keyword].mobile);
+        updatedCount++;
+      }
+    }
+
+    showMessage('검색량 조회 완료!\n\n' +
+      '- 조회 키워드: ' + keywords.length + '개\n' +
+      '- 업데이트: ' + updatedCount + '개');
+
+  } catch (error) {
+    showMessage('오류 발생: ' + error.message);
+    console.error(error);
+  }
+}
+
+/**
+ * 선택한 셀의 키워드만 검색량 조회
+ */
+function 선택키워드검색량조회() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  const selection = sheet.getActiveRange();
+
+  if (!selection) {
+    showMessage('키워드를 선택해주세요.');
+    return;
+  }
+
+  try {
+    const values = selection.getValues();
+    const keywords = [];
+
+    values.forEach(row => {
+      row.forEach(cell => {
+        const keyword = String(cell).trim();
+        if (keyword) keywords.push(keyword);
+      });
+    });
+
+    if (keywords.length === 0) {
+      showMessage('선택한 영역에 키워드가 없습니다.');
+      return;
+    }
+
+    // 네이버 API로 검색량 조회
+    const stats = getKeywordStats(keywords);
+
+    // 결과 표시
+    let result = '=== 검색량 조회 결과 ===\n\n';
+    keywords.forEach(keyword => {
+      if (stats[keyword]) {
+        result += keyword + '\n';
+        result += '  PC: ' + stats[keyword].pc.toLocaleString() + '\n';
+        result += '  M: ' + stats[keyword].mobile.toLocaleString() + '\n\n';
+      } else {
+        result += keyword + ': 데이터 없음\n\n';
+      }
+    });
+
+    showMessage(result);
+
+  } catch (error) {
+    showMessage('오류 발생: ' + error.message);
+    console.error(error);
+  }
+}
+
+// ========================================
+// 전체 시트 일괄 처리
+// ========================================
+
+/**
+ * 전체 시트 키워드 분류 실행
+ */
+function 전체시트분류() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = ss.getSheets();
+  const ui = SpreadsheetApp.getUi();
+
+  // 시트 목록 확인
+  const sheetNames = sheets.map(s => s.getName()).join('\n- ');
+  const confirm = ui.alert(
+    '전체 시트 분류',
+    '다음 시트들에서 키워드 분류를 실행합니다:\n\n- ' + sheetNames + '\n\n계속하시겠습니까?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirm !== ui.Button.YES) return;
+
+  let totalReport = '=== 전체 시트 분류 결과 ===\n\n';
+  let processedCount = 0;
+
+  sheets.forEach(sheet => {
+    try {
+      const destinations = detectDestinations(sheet);
+
+      // 분류 영역이 없으면 스킵
+      if (Object.keys(destinations).length === 0) {
+        totalReport += '[' + sheet.getName() + '] 분류 영역 없음 (스킵)\n';
+        return;
+      }
+
+      const sourceData = getSourceDataFromSheet(sheet);
+
+      if (sourceData.length === 0) {
+        totalReport += '[' + sheet.getName() + '] 데이터 없음 (스킵)\n';
+        return;
+      }
+
+      const groupedData = groupByCategory(sourceData);
+      distributeData(sheet, groupedData, destinations);
+
+      const count = Object.values(groupedData).reduce((sum, arr) => sum + arr.length, 0);
+      totalReport += '[' + sheet.getName() + '] ' + count + '개 키워드 분류 완료\n';
+      processedCount++;
+
+    } catch (e) {
+      totalReport += '[' + sheet.getName() + '] 오류: ' + e.message + '\n';
+    }
+  });
+
+  totalReport += '\n총 ' + processedCount + '개 시트 처리됨';
+  showMessage(totalReport);
+}
+
+/**
+ * 전체 시트 검색량 조회
+ */
+function 전체시트검색량조회() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = ss.getSheets();
+  const ui = SpreadsheetApp.getUi();
+
+  // 시트 목록 확인
+  const sheetNames = sheets.map(s => s.getName()).join('\n- ');
+  const confirm = ui.alert(
+    '전체 시트 검색량 조회',
+    '다음 시트들에서 검색량을 조회합니다:\n\n- ' + sheetNames + '\n\n' +
+    '각 시트의 A열 키워드를 조회하여 B,C열에 입력합니다.\n계속하시겠습니까?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirm !== ui.Button.YES) return;
+
+  let totalReport = '=== 전체 시트 검색량 조회 결과 ===\n\n';
+  let totalKeywords = 0;
+
+  sheets.forEach(sheet => {
+    try {
+      const lastRow = sheet.getLastRow();
+      if (lastRow < CONFIG.SOURCE.START_ROW) {
+        totalReport += '[' + sheet.getName() + '] 데이터 없음 (스킵)\n';
+        return;
+      }
+
+      // A열에서 키워드 가져오기
+      const keywordRange = sheet.getRange(
+        CONFIG.SOURCE.START_ROW,
+        CONFIG.SOURCE.KEYWORD_COL,
+        lastRow - CONFIG.SOURCE.START_ROW + 1,
+        1
+      );
+      const keywordValues = keywordRange.getValues();
+      const keywords = keywordValues.map(row => String(row[0]).trim()).filter(k => k);
+
+      if (keywords.length === 0) {
+        totalReport += '[' + sheet.getName() + '] 키워드 없음 (스킵)\n';
+        return;
+      }
+
+      // 네이버 API로 검색량 조회
+      const stats = getKeywordStats(keywords);
+
+      // B, C열에 검색량 입력
+      let updatedCount = 0;
+      for (let i = 0; i < keywordValues.length; i++) {
+        const keyword = String(keywordValues[i][0]).trim();
+        if (keyword && stats[keyword]) {
+          const row = CONFIG.SOURCE.START_ROW + i;
+          sheet.getRange(row, CONFIG.SOURCE.PC_COL).setValue(stats[keyword].pc);
+          sheet.getRange(row, CONFIG.SOURCE.M_COL).setValue(stats[keyword].mobile);
+          updatedCount++;
+        }
+      }
+
+      totalReport += '[' + sheet.getName() + '] ' + updatedCount + '/' + keywords.length + '개 업데이트\n';
+      totalKeywords += updatedCount;
+
+    } catch (e) {
+      totalReport += '[' + sheet.getName() + '] 오류: ' + e.message + '\n';
+    }
+  });
+
+  totalReport += '\n총 ' + totalKeywords + '개 키워드 업데이트됨';
+  showMessage(totalReport);
+}
+
+/**
+ * 특정 시트에서 소스 데이터 가져오기
+ */
+function getSourceDataFromSheet(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < CONFIG.SOURCE.START_ROW) return [];
+
+  const range = sheet.getRange(
+    CONFIG.SOURCE.START_ROW,
+    1,
+    lastRow - CONFIG.SOURCE.START_ROW + 1,
+    4
+  );
+
+  const values = range.getValues();
+  return values.filter(row => row[0] && row[3]);
 }
