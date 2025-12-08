@@ -189,12 +189,21 @@ function distributeData(sheet, groupedData, destinations) {
 
     // 해당 분류 데이터가 있으면 입력
     if (groupedData[category] && groupedData[category].length > 0) {
-      sheet.getRange(
+      const dataRange = sheet.getRange(
         CONFIG.DEST_START_ROW,
         startCol,
         groupedData[category].length,
         CONFIG.DATA_COLS
-      ).setValues(groupedData[category]);
+      );
+      dataRange.setValues(groupedData[category]);
+
+      // PC, M 열에 숫자 콤마 형식 적용 (2번째, 3번째 열)
+      sheet.getRange(
+        CONFIG.DEST_START_ROW,
+        startCol + 1,  // PC 열
+        groupedData[category].length,
+        2  // PC, M 두 열
+      ).setNumberFormat('#,##0');
     }
   });
 
@@ -238,6 +247,82 @@ function generateReport(groupedData, destinations) {
 }
 
 /**
+ * A~D열 중복 제거
+ * A열 키워드 기준으로 중복 행 삭제 (위에 있는 행 유지)
+ */
+function 중복제거() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  const ui = SpreadsheetApp.getUi();
+
+  // 확인 메시지
+  const confirm = ui.alert(
+    '중복 제거',
+    'A열 키워드 기준으로 중복된 행을 삭제합니다.\n' +
+    '(띄어쓰기까지 완전히 같은 키워드만 중복 처리)\n' +
+    '가장 위에 있는 행을 남기고 나머지는 삭제됩니다.\n\n' +
+    '계속하시겠습니까?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirm !== ui.Button.YES) return;
+
+  try {
+    const lastRow = sheet.getLastRow();
+    if (lastRow < CONFIG.SOURCE.START_ROW) {
+      showMessage('데이터가 없습니다.');
+      return;
+    }
+
+    // A열 키워드 가져오기
+    const keywordRange = sheet.getRange(
+      CONFIG.SOURCE.START_ROW,
+      CONFIG.SOURCE.KEYWORD_COL,
+      lastRow - CONFIG.SOURCE.START_ROW + 1,
+      1
+    );
+    const keywordValues = keywordRange.getValues();
+
+    // 중복 체크 - 이미 나온 키워드 추적
+    const seen = new Set();
+    const duplicateRows = [];  // 삭제할 행 번호들
+
+    for (let i = 0; i < keywordValues.length; i++) {
+      const keyword = String(keywordValues[i][0]);  // 띄어쓰기 유지
+
+      if (keyword === '') continue;  // 빈 셀 무시
+
+      if (seen.has(keyword)) {
+        // 중복 발견 - 삭제 대상
+        duplicateRows.push(CONFIG.SOURCE.START_ROW + i);
+      } else {
+        // 처음 나온 키워드 - 유지
+        seen.add(keyword);
+      }
+    }
+
+    if (duplicateRows.length === 0) {
+      showMessage('중복된 키워드가 없습니다.');
+      return;
+    }
+
+    // 아래에서 위로 삭제 (행 번호 유지를 위해)
+    duplicateRows.reverse();
+    for (const row of duplicateRows) {
+      sheet.deleteRow(row);
+    }
+
+    showMessage('중복 제거 완료!\n\n' +
+      '- 삭제된 행: ' + duplicateRows.length + '개\n' +
+      '- 남은 키워드: ' + seen.size + '개');
+
+  } catch (error) {
+    showMessage('오류 발생: ' + error.message);
+    console.error(error);
+  }
+}
+
+/**
  * 메시지 표시
  */
 function showMessage(message) {
@@ -252,6 +337,8 @@ function onOpen() {
   ui.createMenu('키워드 도구')
     .addItem('키워드 분류 실행 (현재 시트)', '키워드분류')
     .addItem('키워드 분류 실행 (전체 시트)', '전체시트분류')
+    .addSeparator()
+    .addItem('중복 제거 (A~D열)', '중복제거')
     .addSeparator()
     .addItem('검색량 조회 (현재 시트)', '검색량조회')
     .addItem('검색량 조회 (전체 시트)', '전체시트검색량조회')
@@ -377,10 +464,19 @@ function columnToLetter(column) {
 
 /**
  * 네이버 API 서명 생성
+ * 참고: https://github.com/naver/searchad-apidoc
+ * message = "{timestamp}.{method}.{uri}"
+ * HMAC-SHA256(message, secret_key) -> base64
  */
 function generateSignature(timestamp, method, path) {
   const message = timestamp + '.' + method + '.' + path;
-  const signature = Utilities.computeHmacSha256Signature(message, CONFIG.NAVER_API.SECRET_KEY);
+
+  // Google Apps Script에서 HMAC-SHA256 생성
+  // message와 secret_key 모두 UTF-8 바이트로 변환
+  const messageBytes = Utilities.newBlob(message).getBytes();
+  const keyBytes = Utilities.newBlob(CONFIG.NAVER_API.SECRET_KEY).getBytes();
+
+  const signature = Utilities.computeHmacSha256Signature(messageBytes, keyBytes);
   return Utilities.base64Encode(signature);
 }
 
@@ -461,6 +557,58 @@ function getKeywordStats(keywords) {
 }
 
 /**
+ * 키워드 검색량 조회 (진행 상황 표시 버전)
+ */
+function getKeywordStatsWithProgress(keywords, ss) {
+  if (!keywords || keywords.length === 0) return {};
+
+  const results = {};
+  const chunkSize = 100;
+  const totalChunks = Math.ceil(keywords.length / chunkSize);
+
+  for (let i = 0; i < keywords.length; i += chunkSize) {
+    const chunkNum = Math.floor(i / chunkSize) + 1;
+    const chunk = keywords.slice(i, i + chunkSize);
+
+    // 진행 상황 토스트 표시
+    ss.toast(
+      'API 호출 중... (' + chunkNum + '/' + totalChunks + ' 배치)\n' +
+      '처리: ' + Math.min(i + chunkSize, keywords.length) + '/' + keywords.length + '개',
+      '네이버 API',
+      -1
+    );
+
+    const payload = {
+      hintKeywords: chunk,
+      showDetail: '1'
+    };
+
+    try {
+      const response = callNaverApi('POST', '/keywordstool', payload);
+
+      if (response.keywordList) {
+        response.keywordList.forEach(item => {
+          results[item.relKeyword] = {
+            pc: item.monthlyPcQcCnt === '< 10' ? 0 : parseInt(item.monthlyPcQcCnt) || 0,
+            mobile: item.monthlyMobileQcCnt === '< 10' ? 0 : parseInt(item.monthlyMobileQcCnt) || 0
+          };
+        });
+      }
+    } catch (e) {
+      console.error('API 호출 실패:', e.message);
+      ss.toast('API 오류: ' + e.message, '오류', 3);
+    }
+
+    // API 속도 제한 방지
+    if (i + chunkSize < keywords.length) {
+      Utilities.sleep(500);
+    }
+  }
+
+  return results;
+}
+
+/**
  * A열 키워드의 검색량 자동 조회 (B, C열에 입력)
  */
 function 검색량조회() {
@@ -501,10 +649,14 @@ function 검색량조회() {
       return;
     }
 
-    // 네이버 API로 검색량 조회
-    const stats = getKeywordStats(keywords);
+    // 토스트로 시작 알림
+    ss.toast('검색량 조회 시작... (' + keywords.length + '개 키워드)', '진행 중', -1);
 
-    // B, C열에 검색량 입력
+    // 네이버 API로 검색량 조회 (진행 상황 표시 버전)
+    const stats = getKeywordStatsWithProgress(keywords, ss);
+
+    // B, C열에 검색량 입력 (실시간 업데이트)
+    ss.toast('검색량을 시트에 입력 중...', '진행 중', -1);
     let updatedCount = 0;
     for (let i = 0; i < keywordValues.length; i++) {
       const keyword = String(keywordValues[i][0]).trim();
@@ -513,8 +665,15 @@ function 검색량조회() {
         sheet.getRange(row, CONFIG.SOURCE.PC_COL).setValue(stats[keyword].pc);
         sheet.getRange(row, CONFIG.SOURCE.M_COL).setValue(stats[keyword].mobile);
         updatedCount++;
+
+        // 10개마다 화면 갱신
+        if (updatedCount % 10 === 0) {
+          SpreadsheetApp.flush();
+          ss.toast(updatedCount + '개 입력 완료...', '진행 중', -1);
+        }
       }
     }
+    SpreadsheetApp.flush();
 
     showMessage('검색량 조회 완료!\n\n' +
       '- 조회 키워드: ' + keywords.length + '개\n' +
