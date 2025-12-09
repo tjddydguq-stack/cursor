@@ -10,7 +10,8 @@
       "Bash(git commit -m \"$(cat <<''EOF''\n키워드 분류 및 네이버 API 연동 기능 완성\n\n- 5열 단위 구조로 변경 (4열 데이터 + 1열 구분자)\n- M(모바일) 검색량 기준 내림차순 정렬 추가\n- 네이버 검색광고 API 연동 (검색량 자동 조회)\n- 전체 시트 일괄 처리 기능 추가\n- 메뉴 구조 개선 (현재 시트/전체 시트 분리)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
       "Bash(git push:*)",
       "Bash(clasp pull:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\n중복 제거, 숫자 콤마 형식, 진행 상황 표시 기능 추가\n\n- A~D열 중복 제거 기능 추가 (A열 키워드 기준)\n- 키워드 분류 시 PC/M 열에 숫자 콤마 형식 적용\n- 검색량 조회 시 토스트로 진행 상황 실시간 표시\n- 네이버 API 서명 방식 수정\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")"
+      "Bash(git commit -m \"$(cat <<''EOF''\n중복 제거, 숫자 콤마 형식, 진행 상황 표시 기능 추가\n\n- A~D열 중복 제거 기능 추가 (A열 키워드 기준)\n- 키워드 분류 시 PC/M 열에 숫자 콤마 형식 적용\n- 검색량 조회 시 토스트로 진행 상황 실시간 표시\n- 네이버 API 서명 방식 수정\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
