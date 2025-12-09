@@ -335,6 +335,8 @@ function showMessage(message) {
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('키워드 도구')
+    .addItem('📥 데이터 변환 (입력→출력)', '데이터변환')
+    .addSeparator()
     .addItem('키워드 분류 실행 (현재 시트)', '키워드분류')
     .addItem('키워드 분류 실행 (전체 시트)', '전체시트분류')
     .addSeparator()
@@ -883,4 +885,247 @@ function getSourceDataFromSheet(sheet) {
 
   const values = range.getValues();
   return values.filter(row => row[0] && row[3]);
+}
+
+// ========================================
+// 입력 데이터 변환 기능
+// ========================================
+
+/**
+ * 입력 데이터 변환
+ * - A열 빈칸에 위의 검색키워드 채우기
+ * - 카페가 있는 키워드 우선 정렬 (각 그룹 내에서)
+ * - 검색키워드 중복 시 상단 그룹만 유지
+ * - PC/M 검색량은 공란으로
+ *
+ * 입력 형식: A(검색키워드), B(주제키워드), C~E(콘텐츠영역)
+ * 출력 형식: A(검색키워드), B(PC), C(M), D(주제키워드), E~G(콘텐츠영역)
+ */
+function 데이터변환() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  const ui = SpreadsheetApp.getUi();
+
+  // 입력 데이터는 1행=헤더, 2행부터 데이터
+  const INPUT_START_ROW = 2;
+
+  // 확인 메시지
+  const confirm = ui.alert(
+    '데이터 변환',
+    '입력 데이터를 변환합니다.\n\n' +
+    '[수행 작업]\n' +
+    '1. A열 빈칸에 위의 검색키워드 채우기\n' +
+    '2. 카페가 있는 키워드를 각 그룹 상위로 정렬\n' +
+    '3. 검색키워드 중복 시 상단 그룹만 유지\n' +
+    '4. PC/M 검색량은 공란으로\n\n' +
+    '계속하시겠습니까?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirm !== ui.Button.YES) return;
+
+  try {
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+
+    if (lastRow < INPUT_START_ROW) {
+      showMessage('데이터가 없습니다.');
+      return;
+    }
+
+    ss.toast('데이터 읽는 중...', '진행 중', -1);
+
+    // 데이터 범위 읽기 (A~E열 또는 더 많은 열) - 2행부터
+    const dataRange = sheet.getRange(
+      INPUT_START_ROW,
+      1,
+      lastRow - INPUT_START_ROW + 1,
+      Math.max(lastCol, 5)
+    );
+    const rawData = dataRange.getValues();
+
+    // 1. A열 빈칸 채우기 + 그룹화
+    ss.toast('A열 빈칸 채우기 및 그룹화 중...', '진행 중', -1);
+    const groups = fillAndGroup(rawData);
+
+    // 2. 중복 검색키워드 제거 (상단 그룹만 유지)
+    ss.toast('중복 제거 중...', '진행 중', -1);
+    const uniqueGroups = removeDuplicateGroups(groups);
+
+    // 3. 각 그룹 내에서 카페 우선 정렬
+    ss.toast('카페 우선 정렬 중...', '진행 중', -1);
+    const sortedGroups = sortGroupsByCafe(uniqueGroups);
+
+    // 4. 출력 형식으로 변환 (PC/M은 공란)
+    ss.toast('출력 형식으로 변환 중...', '진행 중', -1);
+    const outputData = convertToOutputFormat(sortedGroups);
+
+    // 5. 기존 데이터 삭제 후 새 데이터 입력
+    ss.toast('시트에 출력 중...', '진행 중', -1);
+
+    // A~G열까지의 기존 데이터 삭제 (1행 헤더 포함)
+    sheet.getRange(1, 1, lastRow, 7).clearContent();
+
+    // 헤더 입력 (1행)
+    const header = ['검색키워드', 'PC', 'M', '주제키워드', '콘텐츠영역', '콘텐츠영역', '콘텐츠영역'];
+    sheet.getRange(1, 1, 1, 7).setValues([header]);
+
+    // 새 데이터 입력 (2행부터)
+    if (outputData.length > 0) {
+      const dataRange = sheet.getRange(
+        INPUT_START_ROW,
+        1,
+        outputData.length,
+        outputData[0].length
+      );
+      dataRange.setValues(outputData);
+
+      // 전체 범위 가운데 정렬 (헤더 + 데이터)
+      sheet.getRange(1, 1, outputData.length + 1, 7)
+        .setHorizontalAlignment('center');
+    }
+
+    // 결과 보고
+    const originalRows = rawData.filter(row => row[0] || row[1]).length;
+    const resultRows = outputData.length;
+    const removedGroups = groups.length - uniqueGroups.length;
+
+    showMessage('데이터 변환 완료!\n\n' +
+      '- 원본 행: ' + originalRows + '개\n' +
+      '- 결과 행: ' + resultRows + '개\n' +
+      '- 제거된 중복 그룹: ' + removedGroups + '개\n' +
+      '- 고유 검색키워드: ' + uniqueGroups.length + '개');
+
+  } catch (error) {
+    showMessage('오류 발생: ' + error.message);
+    console.error(error);
+  }
+}
+
+/**
+ * A열 빈칸 채우기 및 그룹화
+ * 빈칸인 경우 위의 검색키워드를 채움
+ * 같은 검색키워드를 가진 행들을 그룹으로 묶음
+ */
+function fillAndGroup(data) {
+  const groups = [];
+  let currentKeyword = '';
+  let currentGroup = [];
+
+  data.forEach(row => {
+    const cellA = String(row[0] || '').trim();
+    const cellB = String(row[1] || '').trim();
+
+    // A열에 값이 있으면 새 그룹 시작
+    if (cellA !== '') {
+      // 이전 그룹 저장
+      if (currentGroup.length > 0) {
+        groups.push({
+          keyword: currentKeyword,
+          rows: currentGroup
+        });
+      }
+      currentKeyword = cellA;
+      currentGroup = [row];
+    } else if (cellB !== '') {
+      // A열은 비어있고 B열에 값이 있으면 현재 그룹에 추가
+      currentGroup.push(row);
+    }
+    // A, B 모두 비어있으면 무시
+  });
+
+  // 마지막 그룹 저장
+  if (currentGroup.length > 0) {
+    groups.push({
+      keyword: currentKeyword,
+      rows: currentGroup
+    });
+  }
+
+  return groups;
+}
+
+/**
+ * 중복 검색키워드 제거 (상단 그룹만 유지)
+ */
+function removeDuplicateGroups(groups) {
+  const seen = new Set();
+  const uniqueGroups = [];
+
+  groups.forEach(group => {
+    if (!seen.has(group.keyword)) {
+      seen.add(group.keyword);
+      uniqueGroups.push(group);
+    }
+  });
+
+  return uniqueGroups;
+}
+
+/**
+ * 각 그룹 내에서 카페 개수 기준 정렬
+ * 콘텐츠영역(C~E열)에 '카페'가 많은 행일수록 상위로
+ * 3개 > 2개 > 1개 > 0개 (카페 없는 행도 하단에 유지)
+ */
+function sortGroupsByCafe(groups) {
+  return groups.map(group => {
+    // 카페 개수 많은 순으로 정렬 (내림차순)
+    // 카페 없는 행(0개)도 하단에 유지
+    const sortedRows = [...group.rows].sort((a, b) => {
+      const cafeCountA = countCafe(a);
+      const cafeCountB = countCafe(b);
+      return cafeCountB - cafeCountA;
+    });
+
+    return {
+      keyword: group.keyword,
+      rows: sortedRows
+    };
+  });
+}
+
+/**
+ * 행에서 '카페' 개수 세기
+ * C, D, E열 (인덱스 2, 3, 4)에서 카페 포함된 셀 개수 반환
+ */
+function countCafe(row) {
+  let count = 0;
+  for (let i = 2; i <= 4; i++) {
+    if (String(row[i] || '').includes('카페')) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/**
+ * 출력 형식으로 변환
+ * 입력: A(검색키워드), B(주제키워드), C~E(콘텐츠영역)
+ * 출력: A(검색키워드), B(PC-공란), C(M-공란), D(주제키워드), E~G(콘텐츠영역)
+ *
+ * 모든 행에 검색키워드를 채워넣음 (빈칸 없이)
+ */
+function convertToOutputFormat(groups) {
+  const output = [];
+
+  groups.forEach(group => {
+    group.rows.forEach(row => {
+      const topicKeyword = row[1] || '';  // B열: 주제키워드
+      const content1 = row[2] || '';  // C열: 콘텐츠영역
+      const content2 = row[3] || '';  // D열: 콘텐츠영역
+      const content3 = row[4] || '';  // E열: 콘텐츠영역
+
+      output.push([
+        group.keyword, // A: 검색키워드 (모든 행에 채움)
+        '',            // B: PC (공란)
+        '',            // C: M (공란)
+        topicKeyword,  // D: 주제키워드
+        content1,      // E: 콘텐츠영역
+        content2,      // F: 콘텐츠영역.1
+        content3       // G: 콘텐츠영역.2
+      ]);
+    });
+  });
+
+  return output;
 }
