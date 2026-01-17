@@ -1,31 +1,32 @@
 /**
  * 키워드 자동 분류 시스템 (배포용)
- * A~D열(빅데이터)을 D열(분류) 기준으로 우측 각 섹션에 자동 미러링
+ * A~E열(빅데이터)을 D열(분류) 기준으로 우측 각 섹션에 자동 미러링
  * M(모바일) 검색량 높은순 정렬
  *
  * [자동 감지 방식]
- * 1행 헤더에서 "분류" 열을 찾아 해당 영역의 분류명을 자동 인식
- * 예: I1셀에 "질환"이라고 쓰면 F-I열이 "질환" 분류 영역이 됨
+ * 2행 헤더에서 분류명 열을 찾아 해당 영역의 분류명을 자동 인식
+ * 예: J2셀에 "메인"이라고 쓰면 G-K열이 "메인" 분류 영역이 됨
  */
 
 // ===== 설정 =====
 const CONFIG = {
-  // 소스 데이터 범위 (A~D열 = 빅데이터)
+  // 소스 데이터 범위 (A~E열 = 빅데이터)
   SOURCE: {
-    HEADER_ROW: 2,       // 헤더 행 (키워드, PC, M, 분류)
+    HEADER_ROW: 2,       // 헤더 행 (키워드, PC, M, 카페탭, 분류)
     START_ROW: 3,        // 데이터 시작 행 (1행=날짜, 2행=헤더, 3행~=데이터)
     KEYWORD_COL: 1,      // A열: 키워드
     PC_COL: 2,           // B열: PC 검색량
     M_COL: 3,            // C열: 모바일 검색량
-    CATEGORY_COL: 4      // D열: 분류
+    CAFE_COL: 4,         // D열: 카페탭 O/X
+    CATEGORY_COL: 5      // E열: 분류
   },
 
-  // 각 분류 영역은 5열 단위 (4열 데이터 + 1열 구분자)
-  COLS_PER_SECTION: 5,
-  DATA_COLS: 4,
+  // 각 분류 영역은 6열 단위 (5열 데이터 + 1열 구분자)
+  COLS_PER_SECTION: 6,
+  DATA_COLS: 5,
 
-  // 분류 영역 시작 열 (F열 = 6부터 시작, E열은 구분자)
-  DEST_START_COL: 6,
+  // 분류 영역 시작 열 (G열 = 7부터 시작, F열은 구분자)
+  DEST_START_COL: 7,
 
   // 각 섹션의 데이터 시작 행 (3행부터 데이터)
   DEST_START_ROW: 3,
@@ -34,7 +35,7 @@ const CONFIG = {
   MAX_ROWS: 500,
 
   // 스캔할 최대 열 수
-  MAX_SCAN_COLS: 50,
+  MAX_SCAN_COLS: 60,
 
   // 헤더 스캔 행 (분류명이 있는 행)
   HEADER_SCAN_ROW: 2
@@ -56,7 +57,7 @@ function onOpen() {
     .addItem('키워드 분류 실행 (현재 시트)', '키워드분류')
     .addItem('키워드 분류 실행 (전체 시트)', '전체시트분류')
     .addSeparator()
-    .addItem('중복 제거 (A~D열)', '중복제거')
+    .addItem('중복 제거 (A~E열)', '중복제거')
     .addSeparator()
     .addItem('분류 목록 확인', '분류목록확인')
     .addItem('설정 확인', '설정확인')
@@ -71,13 +72,19 @@ function onOpen() {
 
 /**
  * 2행 헤더를 스캔하여 분류 영역을 자동 감지
+ * 6열 단위로 스캔, 5번째 열(분류열)에서 분류명 인식
+ * G열(7)부터 시작: G-K + L구분자, M-Q + R구분자, ...
+ * 카페열: J(10), P(16), V(22), ...
+ * 분류열: K(11), Q(17), W(23), ...
  */
 function detectDestinations(sheet) {
   const headerRow = sheet.getRange(CONFIG.HEADER_SCAN_ROW, 1, 1, CONFIG.MAX_SCAN_COLS).getValues()[0];
   const destinations = {};
 
+  // G열(7)부터 6열 단위로 스캔
   for (let col = CONFIG.DEST_START_COL; col < CONFIG.MAX_SCAN_COLS; col += CONFIG.COLS_PER_SECTION) {
-    const categoryCol = col + CONFIG.DATA_COLS - 1;
+    // 분류열은 시작열 + 4 (5번째 열): G+4=K, M+4=Q, ...
+    const categoryCol = col + 4;
     const categoryName = String(headerRow[categoryCol - 1] || '').trim();
 
     if (categoryName && categoryName !== '분류') {
@@ -103,9 +110,9 @@ function 키워드분류() {
 
     if (Object.keys(destinations).length === 0) {
       showMessage('분류 영역을 찾을 수 없습니다.\n\n' +
-        '2행의 I, N, S, X, AC열 등에 분류명을 입력해주세요.\n' +
-        '(4열 단위의 마지막 열에 분류명 입력)\n\n' +
-        '예: I2="질환", N2="병원&시술"');
+        '2행의 J, P, V열 등에 분류명을 입력해주세요.\n' +
+        '(6열 단위의 4번째 열에 분류명 입력)\n\n' +
+        '예: J2="메인", P2="기내용"');
       return;
     }
 
@@ -129,7 +136,7 @@ function 키워드분류() {
 }
 
 /**
- * 소스 데이터(A~D열) 가져오기
+ * 소스 데이터(A~E열) 가져오기 - 원본 행 번호 포함
  */
 function getSourceData(sheet) {
   const lastRow = sheet.getLastRow();
@@ -139,11 +146,23 @@ function getSourceData(sheet) {
     CONFIG.SOURCE.START_ROW,
     1,
     lastRow - CONFIG.SOURCE.START_ROW + 1,
-    4
+    CONFIG.DATA_COLS  // 5열 (A~E)
   );
 
   const values = range.getValues();
-  return values.filter(row => row[0] && row[3]);
+  const result = [];
+
+  // 키워드(A)와 분류(E)가 있는 행만 필터, 원본 행 번호 저장
+  values.forEach((row, index) => {
+    if (row[0] && row[4]) {
+      result.push({
+        data: row,
+        sourceRow: CONFIG.SOURCE.START_ROW + index  // 원본 행 번호
+      });
+    }
+  });
+
+  return result;
 }
 
 /**
@@ -152,24 +171,31 @@ function getSourceData(sheet) {
 function groupByCategory(data) {
   const grouped = {};
 
-  data.forEach(row => {
+  data.forEach(item => {
+    const row = item.data;
+    const sourceRow = item.sourceRow;
     const keyword = row[0];
     const pc = row[1] || '';
     const m = row[2] || '';
-    const category = String(row[3]).trim();
+    const cafe = row[3] || '';  // 카페탭 O/X (D열)
+    const category = String(row[4]).trim();  // 분류 (E열)
 
     if (!grouped[category]) {
       grouped[category] = [];
     }
 
-    grouped[category].push([keyword, pc, m, category]);
+    // 출력 순서: 키워드, PC, M, 카페탭, 분류 + 원본 행 번호
+    grouped[category].push({
+      values: [keyword, pc, m, cafe, category],
+      sourceRow: sourceRow
+    });
   });
 
   // M검색량 높은순 정렬
   Object.keys(grouped).forEach(category => {
     grouped[category].sort((a, b) => {
-      const mA = parseFloat(String(a[2]).replace(/,/g, '')) || 0;
-      const mB = parseFloat(String(b[2]).replace(/,/g, '')) || 0;
+      const mA = parseFloat(String(a.values[2]).replace(/,/g, '')) || 0;
+      const mB = parseFloat(String(b.values[2]).replace(/,/g, '')) || 0;
       return mB - mA;
     });
   });
@@ -178,26 +204,14 @@ function groupByCategory(data) {
 }
 
 /**
- * 각 분류 영역에 데이터 배치
+ * 각 분류 영역에 데이터 배치 - copyTo 사용으로 드롭다운 칩 색상까지 복사
  */
 function distributeData(sheet, groupedData, destinations) {
-  // 원본 D열의 드롭다운 가져오기
-  const sourceValidationCell = sheet.getRange(CONFIG.SOURCE.START_ROW, CONFIG.SOURCE.CATEGORY_COL);
-  const sourceValidation = sourceValidationCell.getDataValidation();
-
-  // D열의 조건부 서식 가져오기
-  const conditionalFormatRules = sheet.getConditionalFormatRules();
-  const dColRules = conditionalFormatRules.filter(rule => {
-    const ranges = rule.getRanges();
-    return ranges.some(range => range.getColumn() === CONFIG.SOURCE.CATEGORY_COL);
-  });
-
   Object.keys(destinations).forEach(category => {
     const dest = destinations[category];
     const startCol = dest.startCol;
-    const categoryCol = startCol + CONFIG.DATA_COLS - 1; // 분류 열 (I, N, S 등)
 
-    // 기존 데이터 및 유효성 검사 모두 초기화
+    // 기존 데이터 및 유효성 검사, 서식 모두 초기화
     const clearRange = sheet.getRange(
       CONFIG.DEST_START_ROW,
       startCol,
@@ -206,15 +220,30 @@ function distributeData(sheet, groupedData, destinations) {
     );
     clearRange.clearContent();
     clearRange.clearDataValidations();
+    clearRange.clearFormat();
 
     if (groupedData[category] && groupedData[category].length > 0) {
+      // 각 행을 원본에서 직접 copyTo로 복사 (드롭다운 칩 색상 포함)
+      groupedData[category].forEach((item, index) => {
+        const sourceRow = item.sourceRow;
+        const destRow = CONFIG.DEST_START_ROW + index;
+
+        // 원본 행(A~E) 전체를 목적지로 복사
+        const sourceRange = sheet.getRange(sourceRow, 1, 1, CONFIG.DATA_COLS);
+        const destRange = sheet.getRange(destRow, startCol, 1, CONFIG.DATA_COLS);
+
+        // copyTo: 값, 서식, 드롭다운 모두 복사
+        sourceRange.copyTo(destRange, SpreadsheetApp.CopyPasteType.PASTE_NORMAL, false);
+      });
+
+      // 전체 영역 가운데 정렬
       const dataRange = sheet.getRange(
         CONFIG.DEST_START_ROW,
         startCol,
         groupedData[category].length,
         CONFIG.DATA_COLS
       );
-      dataRange.setValues(groupedData[category]);
+      dataRange.setHorizontalAlignment('center');
 
       // PC, M 열에 숫자 콤마 형식 적용
       sheet.getRange(
@@ -223,54 +252,8 @@ function distributeData(sheet, groupedData, destinations) {
         groupedData[category].length,
         2
       ).setNumberFormat('#,##0');
-
-      // 분류 열(4번째 열)에 가운데 정렬 + 드롭다운 적용
-      const categoryColRange = sheet.getRange(
-        CONFIG.DEST_START_ROW,
-        categoryCol,
-        groupedData[category].length,
-        1
-      );
-      categoryColRange.setHorizontalAlignment('center');
-
-      if (sourceValidation) {
-        categoryColRange.setDataValidation(sourceValidation);
-      }
     }
   });
-
-  // 조건부 서식을 각 분류 열에 복사
-  copyConditionalFormatting(sheet, dColRules, destinations);
-}
-
-/**
- * D열의 조건부 서식을 각 분류 열에 복사
- */
-function copyConditionalFormatting(sheet, dColRules, destinations) {
-  if (dColRules.length === 0) return;
-
-  const newRules = sheet.getConditionalFormatRules();
-
-  Object.keys(destinations).forEach(category => {
-    const dest = destinations[category];
-    const categoryCol = dest.startCol + CONFIG.DATA_COLS - 1;
-
-    dColRules.forEach(rule => {
-      // 새 범위 생성 (해당 분류 열 전체)
-      const newRange = sheet.getRange(
-        CONFIG.DEST_START_ROW,
-        categoryCol,
-        CONFIG.MAX_ROWS,
-        1
-      );
-
-      // 기존 규칙 복사하여 새 범위에 적용
-      const newRule = rule.copy().setRanges([newRange]).build();
-      newRules.push(newRule);
-    });
-  });
-
-  sheet.setConditionalFormatRules(newRules);
 }
 
 /**
@@ -290,6 +273,7 @@ function generateReport(groupedData, destinations) {
   });
 
   report += '\n총 ' + total + '개 키워드 분류됨';
+  report += '\n(서식/드롭다운 포함 복사됨)';
 
   const unmapped = allCategories.filter(cat => !destinations[cat]);
   if (unmapped.length > 0) {
@@ -442,7 +426,7 @@ function columnToLetter(column) {
 }
 
 /**
- * 현재 A~D열의 분류 목록 확인
+ * 현재 A~E열의 분류 목록 확인
  */
 function 분류목록확인() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -451,8 +435,8 @@ function 분류목록확인() {
   const sourceData = getSourceData(sheet);
 
   const categories = {};
-  sourceData.forEach(row => {
-    const cat = String(row[3]).trim();
+  sourceData.forEach(item => {
+    const cat = String(item.data[4]).trim();  // E열: 분류 (인덱스 4)
     categories[cat] = (categories[cat] || 0) + 1;
   });
 
@@ -471,7 +455,7 @@ function 분류목록확인() {
     Object.keys(destinations).forEach(cat => {
       const dest = destinations[cat];
       const startLetter = columnToLetter(dest.startCol);
-      const endLetter = columnToLetter(dest.categoryCol);
+      const endLetter = columnToLetter(dest.startCol + CONFIG.DATA_COLS - 1);
       info += '- ' + cat + ': ' + startLetter + '-' + endLetter + '열\n';
     });
   }
@@ -488,7 +472,7 @@ function 설정확인() {
   const destinations = detectDestinations(sheet);
 
   let info = '=== 현재 설정 ===\n\n';
-  info += '소스 데이터: A~D열 (빅데이터)\n';
+  info += '소스 데이터: A~E열 (키워드, PC, M, 카페탭, 분류)\n';
   info += '데이터 시작 행: ' + CONFIG.SOURCE.START_ROW + '행\n';
   info += '헤더 스캔 행: ' + CONFIG.HEADER_SCAN_ROW + '행\n';
   info += '정렬: M(모바일) 검색량 높은순\n\n';
@@ -496,12 +480,12 @@ function 설정확인() {
 
   if (Object.keys(destinations).length === 0) {
     info += '(감지된 분류 없음)\n';
-    info += '\n2행의 I, N, S, X, AC열 등에 분류명을 입력하세요.';
+    info += '\n2행의 J, P, V열 등에 분류명을 입력하세요.';
   } else {
     Object.keys(destinations).forEach(cat => {
       const dest = destinations[cat];
       const startLetter = columnToLetter(dest.startCol);
-      const endLetter = columnToLetter(dest.categoryCol);
+      const endLetter = columnToLetter(dest.startCol + CONFIG.DATA_COLS - 1);
       info += '  - ' + cat + ' -> ' + startLetter + '-' + endLetter + '열\n';
     });
   }
@@ -516,18 +500,19 @@ function 도움말() {
   const help =
 '=== 키워드 분류 도구 ===\n\n' +
 '[키워드 분류]\n' +
-'A~D열 데이터를 우측 분류 영역에 배치합니다.\n' +
+'A~E열 데이터를 우측 분류 영역에 배치합니다.\n' +
 'M(모바일) 검색량 높은순으로 정렬됩니다.\n\n' +
 '[구조]\n' +
 '1행: 날짜/제목\n' +
-'2행: 헤더 (키워드, PC, M, 분류)\n' +
+'2행: 헤더 (키워드, PC, M, 카페탭, 분류)\n' +
 '3행~: 데이터\n\n' +
-'A~D열: 빅데이터 (모든 키워드)\n' +
-'우측 영역: 분류별 자동 미러링\n\n' +
+'A~E열: 빅데이터 (모든 키워드)\n' +
+'F열: 구분자\n' +
+'G열~: 분류별 자동 미러링 (6열 단위)\n\n' +
 '[자동 감지 방식]\n' +
-'2행의 I, N, S, X, AC열(4열 단위 마지막)에\n' +
+'2행의 J, P, V열 등(6열 단위의 4번째)에\n' +
 '분류명을 입력하면 자동으로 인식됩니다.\n\n' +
-'예: I2="질환" -> F-I열이 질환 영역';
+'예: J2="메인" -> G-K열이 메인 영역';
 
   showMessage(help);
 }
