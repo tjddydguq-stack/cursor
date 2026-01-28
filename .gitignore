@@ -1,3 +1,7 @@
+# 토큰 파일 (민감한 정보)
+.token.json
+*.token.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -7,37 +11,14 @@ __pycache__/
 env/
 venv/
 ENV/
-*.egg-info/
-dist-info/
-
-# PyInstaller
-build/
-dist/
-*.spec
-
-# 환경 변수
-.env
-
-# Excel 결과 파일 (선택사항 - 결과물을 Git에 포함하고 싶으면 이 줄들 삭제)
-# *.xlsx
-# test_results.xlsx
-# keyword_search_results.xlsx
+.venv
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
-desktop.ini
-
-# 임시 파일
-*.tmp
-*.bak
-*.log
-abd
-

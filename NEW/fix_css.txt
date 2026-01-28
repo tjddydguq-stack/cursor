@@ -1,0 +1,103 @@
+<style>
+.mobile-layer.fixed .opt-content {
+    display: block !important;
+}
+
+@media all and (max-width: 767px) {
+  .detail-container {
+    -webkit-transform: translate3d(0,0,0);
+    transform: translate3d(0,0,0);
+  }
+
+  .mobile-fix-footer {
+    position: fixed;
+    bottom: 0;
+    bottom: constant(safe-area-inset-bottom);
+    bottom: env(safe-area-inset-bottom);
+    left: 0;
+    width: 100%;
+    z-index: 99999;
+    background: #fff;
+    -webkit-transform: translate3d(0,0,0);
+    transform: translate3d(0,0,0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    box-sizing: border-box;
+  }
+
+  body {
+    padding-bottom: 90px;
+    padding-bottom: calc(90px + constant(safe-area-inset-bottom));
+    padding-bottom: calc(90px + env(safe-area-inset-bottom));
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-fix-footer .jsGoReview {
+    flex: 0 0 auto;
+  }
+
+  .mobile-fix-footer > .btnNormal,
+  .mobile-fix-footer > .btnSubmit {
+    flex: 1 1 0;
+    max-width: 260px;
+    height: 48px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    box-sizing: border-box;
+  }
+
+  .mobile-fix-footer .btnSubmit span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+@media all and (max-width: 767px) {
+  body.isFixActionOpen .infoArea-footer .productAction,
+  body.isFixActionOpen .infoArea-footer .app-pay-wrap {
+    display: none !important;
+  }
+}
+
+@media all and (max-width: 767px) {
+  #fixedActionButton {
+    width: 99% !important;
+    margin-left: 0 !important;
+    padding: 0 !important;
+    left: 0 !important;
+    display: flex !important;
+    justify-content: center !important;
+  }
+
+  #fixedActionButton > .buy-btn-wrap,
+  #fixedActionButton > .buy-btn-wrap.flex {
+    width: 100% !important;
+    max-width: 315px !important;
+    margin: 0 auto !important;
+  }
+}
+
+@media all and (min-width: 1301px) {
+  .mobile-layer.fixed {
+    left: 50% !important;
+    margin-left: 60px !important;
+  }
+}
+
+.xans-product-detail.flex {
+    flex-wrap: wrap !important;
+}
+
+.xans-product-detail.flex > .xans-product-additional {
+    flex-basis: 100% !important;
+    width: 100% !important;
+    order: 99 !important;
+}
+</style>

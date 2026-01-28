@@ -1,0 +1,68 @@
+{
+  "name": "claude-chat-extension",
+  "displayName": "Claude Chat Extension",
+  "description": "Cursor에서 Claude와 채팅할 수 있는 확장 프로그램",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:claudeChat.openChat"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeChat.openChat",
+        "title": "Claude Chat 열기"
+      },
+      {
+        "command": "claudeChat.closeChat",
+        "title": "Claude Chat 닫기"
+      },
+      {
+        "command": "pageMonitor.open",
+        "title": "자사몰 페이지 모니터 열기",
+        "icon": "$(browser)"
+      },
+      {
+        "command": "pageChecker.start",
+        "title": "자사몰 페이지 체크 시작",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "pageChecker.stop",
+        "title": "자사몰 페이지 체크 중지",
+        "icon": "$(stop)"
+      },
+      {
+        "command": "pageChecker.checkPage",
+        "title": "자사몰 페이지 체크 (수동)"
+      },
+      {
+        "command": "pageChecker.showStatus",
+        "title": "페이지 체크 상태 보기"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "claudeChat.closeChat",
+        "key": "ctrl+shift+x",
+        "mac": "cmd+shift+x"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "16.x",
+    "typescript": "^4.9.4"
+  }
+}

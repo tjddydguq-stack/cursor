@@ -1,0 +1,93 @@
+<script>
+(function() {
+    var footer = document.querySelector('.mobile-fix-footer');
+    var layerBtn = document.querySelector('.jsLayerBtn');
+    var closeBtn = document.querySelector('.jsFixClose');
+    var closeBg = document.querySelector('.fix-layer-close-bg');
+    var mobileLayerBg = document.querySelector('.jsMobileLayerBG');
+
+    if (!footer) return;
+
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    var scrollPos = 0;
+    var ticking = false;
+
+    // 초기 상태 설정
+    footer.style.opacity = '0';
+    footer.style.pointerEvents = 'none';
+    footer.style.visibility = 'hidden';
+    footer.style.transition = 'opacity 0.2s ease';
+
+    if (layerBtn) {
+        layerBtn.addEventListener('click', function() {
+            setTimeout(function() {
+                var mobileLayer = document.querySelector('.jsMobileLayer');
+                if (mobileLayer && mobileLayer.classList.contains('fixed')) {
+                    footer.style.opacity = '0';
+                    footer.style.pointerEvents = 'none';
+                    footer.style.visibility = 'hidden';
+
+                    if (isIOS) {
+                        scrollPos = window.pageYOffset || document.documentElement.scrollTop || 0;
+                        document.body.style.position = 'fixed';
+                        document.body.style.top = -scrollPos + 'px';
+                        document.body.style.left = '0';
+                        document.body.style.right = '0';
+                    }
+                }
+            }, 300);
+        });
+    }
+
+    function getScrollY() {
+        return window.pageYOffset || document.documentElement.scrollTop || 0;
+    }
+
+    function showIfScrolled() {
+        var mobileLayer = document.querySelector('.jsMobileLayer');
+        if (mobileLayer && mobileLayer.classList.contains('fixed')) {
+            return;
+        }
+
+        var scrollY = getScrollY();
+
+        if (scrollY > 800) {
+            footer.style.opacity = '1';
+            footer.style.pointerEvents = 'auto';
+            footer.style.visibility = 'visible';
+        } else {
+            footer.style.opacity = '0';
+            footer.style.pointerEvents = 'none';
+            footer.style.visibility = 'hidden';
+        }
+    }
+
+    function closeLayer() {
+        if (isIOS && document.body.style.position === 'fixed') {
+            document.body.style.position = '';
+            document.body.style.top = '';
+            document.body.style.left = '';
+            document.body.style.right = '';
+            window.scrollTo(0, scrollPos);
+        }
+        setTimeout(showIfScrolled, 100);
+    }
+
+    if (closeBtn) closeBtn.addEventListener('click', closeLayer);
+    if (closeBg) closeBg.addEventListener('click', closeLayer);
+    if (mobileLayerBg) mobileLayerBg.addEventListener('click', closeLayer);
+
+    window.addEventListener('scroll', function() {
+        if (!ticking) {
+            window.requestAnimationFrame(function() {
+                showIfScrolled();
+                ticking = false;
+            });
+            ticking = true;
+        }
+    }, { passive: true });
+
+    // 초기 실행
+    showIfScrolled();
+})();
+</script>

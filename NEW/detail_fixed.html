@@ -1,0 +1,233 @@
+<!--@layout(/layout/basic/layout.html)-->
+
+<style>
+.mobile-layer.fixed .opt-content {
+    display: block !important;
+}
+
+/* ============================================
+   iOS Safari 스크롤 버그 수정 버전
+   ============================================ */
+
+@media all and (max-width: 767px) {
+  /* 기존: transform: none !important 삭제 */
+  /* GPU 가속을 위한 translate3d 사용 */
+  .detail-container {
+    -webkit-transform: translate3d(0,0,0);
+    transform: translate3d(0,0,0);
+  }
+
+  .mobile-fix-footer {
+    position: fixed;
+    /* iOS safe-area 올바르게 적용 */
+    bottom: 0;
+    bottom: constant(safe-area-inset-bottom); /* iOS 11.0-11.2 */
+    bottom: env(safe-area-inset-bottom); /* iOS 11.2+ */
+    left: 0;
+    width: 100%;
+    z-index: 99999;
+    background: #fff;
+    /* iOS 렌더링 레이어 분리 */
+    -webkit-transform: translate3d(0,0,0);
+    transform: translate3d(0,0,0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    /* 레이아웃 */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    box-sizing: border-box;
+  }
+
+  body {
+    /* 중복 제거 - 하나로 통합 */
+    padding-bottom: 90px;
+    padding-bottom: calc(90px + constant(safe-area-inset-bottom));
+    padding-bottom: calc(90px + env(safe-area-inset-bottom));
+    /* iOS 부드러운 스크롤 */
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-fix-footer .jsGoReview {
+    flex: 0 0 auto;
+  }
+
+  .mobile-fix-footer > .btnNormal,
+  .mobile-fix-footer > .btnSubmit {
+    flex: 1 1 0;
+    max-width: 260px;
+    height: 48px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    box-sizing: border-box;
+  }
+
+  .mobile-fix-footer .btnSubmit span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* 고정바가 활성화되면 위쪽 버튼 숨김 */
+@media all and (max-width: 767px) {
+  body.isFixActionOpen .infoArea-footer .productAction,
+  body.isFixActionOpen .infoArea-footer .app-pay-wrap {
+    display: none !important;
+  }
+}
+
+@media all and (max-width: 767px) {
+  /* 옵션 레이어 안 버튼 정렬 */
+  #fixedActionButton {
+    width: 99% !important;
+    margin-left: 0 !important;
+    padding: 0 !important;
+    left: 0 !important;
+    display: flex !important;
+    justify-content: center !important;
+  }
+
+  #fixedActionButton > .buy-btn-wrap,
+  #fixedActionButton > .buy-btn-wrap.flex {
+    width: 100% !important;
+    max-width: 315px !important;
+    margin: 0 auto !important;
+  }
+}
+
+/* PC 구매창 위치 수정 */
+@media all and (min-width: 1301px) {
+  .mobile-layer.fixed {
+    left: 50% !important;
+    margin-left: 60px !important;
+  }
+}
+
+/* 리뷰 영역 레이아웃 수정 */
+.xans-product-detail.flex {
+    flex-wrap: wrap !important;
+}
+
+.xans-product-detail.flex > .xans-product-additional {
+    flex-basis: 100% !important;
+    width: 100% !important;
+    order: 99 !important;
+}
+</style>
+
+<!--@css(/moa/css/lib/swiper.min.css)-->
+<!--@js(/moa/js/lib/swiper.min.js)-->
+<!--@js(/moa/js/product/detail.js)-->
+
+<!--
+    $category_page = /product/list.html
+    $project_page = /product/project.html
+    $jointbuy_page = /product/jointbuy.html
+-->
+
+<!--
+============================================
+여기서부터는 기존 코드와 동일합니다.
+기존 코드의 나머지 부분을 여기에 붙여넣으세요.
+(line 116 ~ 1220 정도까지)
+============================================
+-->
+
+<!--
+============================================
+마지막 JavaScript 부분 - 수정된 버전
+showIfScrolled 함수 iOS 최적화
+============================================
+-->
+
+<script>
+(function() {
+    var footer = document.querySelector('.mobile-fix-footer');
+    var layerBtn = document.querySelector('.jsLayerBtn');
+    var mobileLayer = document.querySelector('.jsMobileLayer');
+    var closeBtn = document.querySelector('.jsFixClose');
+    var closeBg = document.querySelector('.fix-layer-close-bg');
+    var mobileLayerBg = document.querySelector('.jsMobileLayerBG');
+
+    if (!footer) return;
+
+    // iOS 감지
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+    // 스크롤 위치 저장 변수
+    var scrollPos = 0;
+
+    if (layerBtn) {
+        layerBtn.addEventListener('click', function() {
+            setTimeout(function() {
+                var mobileLayer = document.querySelector('.jsMobileLayer');
+                if (mobileLayer && mobileLayer.classList.contains('fixed')) {
+                    footer.style.opacity = '0';
+                    footer.style.pointerEvents = 'none';
+                    footer.style.visibility = 'hidden';
+
+                    // iOS에서 body 스크롤 잠금
+                    if (isIOS) {
+                        scrollPos = window.scrollY;
+                        document.body.style.position = 'fixed';
+                        document.body.style.top = -scrollPos + 'px';
+                        document.body.style.width = '100%';
+                    }
+                }
+            }, 300);
+        });
+    }
+
+    function showIfScrolled() {
+        // 모바일 레이어가 열려있으면 실행하지 않음
+        var mobileLayer = document.querySelector('.jsMobileLayer');
+        if (mobileLayer && mobileLayer.classList.contains('fixed')) {
+            return;
+        }
+
+        if (window.scrollY > 800) {
+            footer.style.opacity = '1';
+            footer.style.pointerEvents = 'auto';
+            footer.style.visibility = 'visible';
+        } else {
+            footer.style.opacity = '0';
+            footer.style.pointerEvents = 'none';
+            footer.style.visibility = 'hidden';
+        }
+    }
+
+    function closeLayer() {
+        // iOS에서 body 스크롤 복원
+        if (isIOS) {
+            document.body.style.position = '';
+            document.body.style.top = '';
+            document.body.style.width = '';
+            window.scrollTo(0, scrollPos);
+        }
+        showIfScrolled();
+    }
+
+    if (closeBtn) closeBtn.addEventListener('click', closeLayer);
+    if (closeBg) closeBg.addEventListener('click', closeLayer);
+    if (mobileLayerBg) mobileLayerBg.addEventListener('click', closeLayer);
+
+    // 스크롤 이벤트 - iOS 최적화 (passive 옵션)
+    var ticking = false;
+    window.addEventListener('scroll', function() {
+        if (!ticking) {
+            window.requestAnimationFrame(function() {
+                showIfScrolled();
+                ticking = false;
+            });
+            ticking = true;
+        }
+    }, { passive: true });
+
+    // 초기 실행
+    showIfScrolled();
+})();
+</script>

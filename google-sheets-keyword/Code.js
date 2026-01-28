@@ -1,1131 +1,1041 @@
 /**
- * 키워드 자동 분류 시스템
- * A~D열(빅데이터)을 D열(분류) 기준으로 우측 각 섹션에 자동 미러링
- * M(모바일) 검색량 높은순 정렬
- *
- * [자동 감지 방식]
- * 1행 헤더에서 "분류" 열을 찾아 해당 영역의 분류명을 자동 인식
- * 예: I1셀에 "질환"이라고 쓰면 F-I열이 "질환" 분류 영역이 됨
+ * 섬고짚 네이버광고 분석 시스템
+ * 키워드/검색어 보고서를 분석하고 종합 제언을 생성합니다.
  */
 
-// ===== 설정 =====
-const CONFIG = {
-  // 네이버 검색광고 API 설정
-  NAVER_API: {
-    ACCESS_LICENSE: '01000000007a25c6f02f5f40ab2252dd3712bcebe04647e919809a2348f9fd4d10e7feb348',
-    SECRET_KEY: 'AQAAAAB6JcbwL19AqyJS3TcSvOvgtdSrGzqG+zlrq0GVt6J9Sw==',
-    CUSTOMER_ID: '3526315',
-    BASE_URL: 'https://api.naver.com'
-  },
-
-  // 소스 데이터 범위 (A~D열 = 빅데이터)
-  SOURCE: {
-    HEADER_ROW: 2,       // 헤더 행 (키워드, PC, M, 분류)
-    START_ROW: 3,        // 데이터 시작 행 (1행=날짜, 2행=헤더, 3행~=데이터)
-    KEYWORD_COL: 1,      // A열: 키워드
-    PC_COL: 2,           // B열: PC 검색량
-    M_COL: 3,            // C열: 모바일 검색량
-    CATEGORY_COL: 4      // D열: 분류
-  },
-
-  // 각 분류 영역은 5열 단위 (4열 데이터 + 1열 구분자)
-  // 데이터: 키워드, PC, M, 분류 (4열) + 구분자 (1열)
-  COLS_PER_SECTION: 5,
-  DATA_COLS: 4,  // 실제 데이터 열 수
-
-  // 분류 영역 시작 열 (F열 = 6부터 시작, E열은 구분자)
-  DEST_START_COL: 6,
-
-  // 각 섹션의 데이터 시작 행 (3행부터 데이터)
-  DEST_START_ROW: 3,
-
-  // 초기화할 최대 행 수
-  MAX_ROWS: 500,
-
-  // 스캔할 최대 열 수
-  MAX_SCAN_COLS: 50,
-
-  // 헤더 스캔 행 (분류명이 있는 행)
-  HEADER_SCAN_ROW: 2
-};
-
-/**
- * 2행 헤더를 스캔하여 분류 영역을 자동 감지
- * 5열 단위 (4열 데이터 + 1열 구분자)로 스캔
- * 4번째 열(분류열)에 있는 값을 분류명으로 인식
- */
-function detectDestinations(sheet) {
-  const headerRow = sheet.getRange(CONFIG.HEADER_SCAN_ROW, 1, 1, CONFIG.MAX_SCAN_COLS).getValues()[0];
-  const destinations = {};
-
-  // F열(6)부터 5열 단위로 스캔 (F-I + J구분자, K-N + O구분자, ...)
-  for (let col = CONFIG.DEST_START_COL; col < CONFIG.MAX_SCAN_COLS; col += CONFIG.COLS_PER_SECTION) {
-    const categoryCol = col + CONFIG.DATA_COLS - 1; // 4번째 열 (분류열): F+3=I, K+3=N, ...
-    const categoryName = String(headerRow[categoryCol - 1] || '').trim();
-
-    // 분류명이 있고, "분류"라는 일반 텍스트가 아닌 경우
-    if (categoryName && categoryName !== '분류') {
-      destinations[categoryName] = {
-        startCol: col,
-        categoryCol: categoryCol
-      };
-    }
-  }
-
-  return destinations;
-}
-
-/**
- * 메인 함수: 키워드 분류 실행
- */
-function 키워드분류() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-
-  try {
-    // 1. 헤더에서 분류 영역 자동 감지
-    const destinations = detectDestinations(sheet);
-
-    if (Object.keys(destinations).length === 0) {
-      showMessage('분류 영역을 찾을 수 없습니다.\n\n' +
-        '2행의 I, N, S, X, AC열 등에 분류명을 입력해주세요.\n' +
-        '(4열 단위의 마지막 열에 분류명 입력)\n\n' +
-        '예: I2="질환", N2="병원&시술"');
-      return;
-    }
-
-    // 2. 소스 데이터 가져오기
-    const sourceData = getSourceData(sheet);
-
-    if (sourceData.length === 0) {
-      showMessage('분류할 데이터가 없습니다.');
-      return;
-    }
-
-    // 3. 분류별로 그룹화 + M검색량 높은순 정렬
-    const groupedData = groupByCategory(sourceData);
-
-    // 4. 각 분류 영역에 데이터 배치
-    distributeData(sheet, groupedData, destinations);
-
-    // 5. 결과 리포트
-    const report = generateReport(groupedData, destinations);
-    showMessage(report);
-
-  } catch (error) {
-    showMessage('오류 발생: ' + error.message);
-    console.error(error);
-  }
-}
-
-/**
- * 소스 데이터(A~D열) 가져오기
- */
-function getSourceData(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < CONFIG.SOURCE.START_ROW) return [];
-
-  const range = sheet.getRange(
-    CONFIG.SOURCE.START_ROW,
-    1,
-    lastRow - CONFIG.SOURCE.START_ROW + 1,
-    4
-  );
-
-  const values = range.getValues();
-
-  // 빈 행 필터링 (키워드와 분류가 있는 행만)
-  return values.filter(row => row[0] && row[3]);
-}
-
-/**
- * 분류별로 데이터 그룹화 + M검색량 높은순 정렬
- */
-function groupByCategory(data) {
-  const grouped = {};
-
-  data.forEach(row => {
-    const keyword = row[0];
-    const pc = row[1] || 0;
-    const m = row[2] || 0;
-    const category = String(row[3]).trim();
-
-    if (!grouped[category]) {
-      grouped[category] = [];
-    }
-
-    // 키워드, PC, M, 분류 모두 저장
-    grouped[category].push([keyword, pc, m, category]);
-  });
-
-  // 각 분류별로 M검색량(인덱스 2) 높은순 정렬
-  Object.keys(grouped).forEach(category => {
-    grouped[category].sort((a, b) => {
-      // 문자열/숫자 모두 처리 (쉼표 제거 후 숫자 변환)
-      const mA = parseFloat(String(a[2]).replace(/,/g, '')) || 0;
-      const mB = parseFloat(String(b[2]).replace(/,/g, '')) || 0;
-      return mB - mA; // 내림차순 (높은순)
-    });
-  });
-
-  return grouped;
-}
-
-/**
- * 각 분류 영역에 데이터 배치
- */
-function distributeData(sheet, groupedData, destinations) {
-  Object.keys(destinations).forEach(category => {
-    const dest = destinations[category];
-    const startCol = dest.startCol;
-
-    // 해당 영역 초기화 (DATA_COLS열: 키워드, PC, M, 분류)
-    sheet.getRange(
-      CONFIG.DEST_START_ROW,
-      startCol,
-      CONFIG.MAX_ROWS,
-      CONFIG.DATA_COLS
-    ).clearContent();
-
-    // 해당 분류 데이터가 있으면 입력
-    if (groupedData[category] && groupedData[category].length > 0) {
-      const dataRange = sheet.getRange(
-        CONFIG.DEST_START_ROW,
-        startCol,
-        groupedData[category].length,
-        CONFIG.DATA_COLS
-      );
-      dataRange.setValues(groupedData[category]);
-
-      // PC, M 열에 숫자 콤마 형식 적용 (2번째, 3번째 열)
-      sheet.getRange(
-        CONFIG.DEST_START_ROW,
-        startCol + 1,  // PC 열
-        groupedData[category].length,
-        2  // PC, M 두 열
-      ).setNumberFormat('#,##0');
-    }
-  });
-
-  // 헤더에 없는 분류 확인
-  const unknownCategories = Object.keys(groupedData).filter(
-    cat => !destinations[cat]
-  );
-
-  if (unknownCategories.length > 0) {
-    console.log('헤더에 없는 분류:', unknownCategories);
-  }
-}
-
-/**
- * 결과 리포트 생성
- */
-function generateReport(groupedData, destinations) {
-  let report = '분류 완료!\n\n';
-
-  let total = 0;
-  const allCategories = Object.keys(groupedData);
-
-  allCategories.forEach(category => {
-    const count = groupedData[category].length;
-    total += count;
-    const hasDestination = destinations[category] ? '' : ' (헤더 없음)';
-    report += '- ' + category + ': ' + count + '개' + hasDestination + '\n';
-  });
-
-  report += '\n총 ' + total + '개 키워드 분류됨';
-
-  // 헤더에 없는 분류 경고
-  const unmapped = allCategories.filter(cat => !destinations[cat]);
-  if (unmapped.length > 0) {
-    report += '\n\n[주의] 다음 분류는 헤더에 없어서 배치되지 않았습니다:\n';
-    report += unmapped.join(', ');
-    report += '\n\n해당 분류명을 2행 헤더에 추가해주세요.';
-  }
-
-  return report;
-}
-
-/**
- * A~D열 중복 제거
- * A열 키워드 기준으로 중복 행 삭제 (위에 있는 행 유지)
- */
-function 중복제거() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-  const ui = SpreadsheetApp.getUi();
-
-  // 확인 메시지
-  const confirm = ui.alert(
-    '중복 제거',
-    'A열 키워드 기준으로 중복된 행을 삭제합니다.\n' +
-    '(띄어쓰기까지 완전히 같은 키워드만 중복 처리)\n' +
-    '가장 위에 있는 행을 남기고 나머지는 삭제됩니다.\n\n' +
-    '계속하시겠습니까?',
-    ui.ButtonSet.YES_NO
-  );
-
-  if (confirm !== ui.Button.YES) return;
-
-  try {
-    const lastRow = sheet.getLastRow();
-    if (lastRow < CONFIG.SOURCE.START_ROW) {
-      showMessage('데이터가 없습니다.');
-      return;
-    }
-
-    // A열 키워드 가져오기
-    const keywordRange = sheet.getRange(
-      CONFIG.SOURCE.START_ROW,
-      CONFIG.SOURCE.KEYWORD_COL,
-      lastRow - CONFIG.SOURCE.START_ROW + 1,
-      1
-    );
-    const keywordValues = keywordRange.getValues();
-
-    // 중복 체크 - 이미 나온 키워드 추적
-    const seen = new Set();
-    const duplicateRows = [];  // 삭제할 행 번호들
-
-    for (let i = 0; i < keywordValues.length; i++) {
-      const keyword = String(keywordValues[i][0]);  // 띄어쓰기 유지
-
-      if (keyword === '') continue;  // 빈 셀 무시
-
-      if (seen.has(keyword)) {
-        // 중복 발견 - 삭제 대상
-        duplicateRows.push(CONFIG.SOURCE.START_ROW + i);
-      } else {
-        // 처음 나온 키워드 - 유지
-        seen.add(keyword);
-      }
-    }
-
-    if (duplicateRows.length === 0) {
-      showMessage('중복된 키워드가 없습니다.');
-      return;
-    }
-
-    // 아래에서 위로 삭제 (행 번호 유지를 위해)
-    duplicateRows.reverse();
-    for (const row of duplicateRows) {
-      sheet.deleteRow(row);
-    }
-
-    showMessage('중복 제거 완료!\n\n' +
-      '- 삭제된 행: ' + duplicateRows.length + '개\n' +
-      '- 남은 키워드: ' + seen.size + '개');
-
-  } catch (error) {
-    showMessage('오류 발생: ' + error.message);
-    console.error(error);
-  }
-}
-
-/**
- * 메시지 표시
- */
-function showMessage(message) {
-  SpreadsheetApp.getUi().alert(message);
-}
-
-/**
- * 메뉴 추가
- */
+// ============================================
+// 1. 메뉴 생성
+// ============================================
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
-  ui.createMenu('키워드 도구')
-    .addItem('📥 데이터 변환 (입력→출력)', '데이터변환')
+  ui.createMenu('📊 광고 분석')
+    .addItem('📋 종합 분석 (최근 6개월)', 'runSummaryAnalysis')
+    .addItem('📅 월별 분석', 'runMonthlyAnalysis')
     .addSeparator()
-    .addItem('키워드 분류 실행 (현재 시트)', '키워드분류')
-    .addItem('키워드 분류 실행 (전체 시트)', '전체시트분류')
-    .addSeparator()
-    .addItem('중복 제거 (A~D열)', '중복제거')
-    .addSeparator()
-    .addItem('검색량 조회 (현재 시트)', '검색량조회')
-    .addItem('검색량 조회 (전체 시트)', '전체시트검색량조회')
-    .addItem('검색량 조회 (선택 키워드)', '선택키워드검색량조회')
-    .addSeparator()
-    .addItem('분류 목록 확인', '분류목록확인')
-    .addItem('설정 확인', '설정확인')
-    .addSeparator()
-    .addItem('도움말', '도움말')
+    .addItem('🗑️ 종합탭 초기화', 'clearSummarySheet')
+    .addItem('🗑️ 월별탭 초기화', 'clearMonthlySheet')
     .addToUi();
 }
 
-/**
- * 현재 A~D열의 분류 목록 확인
- */
-function 분류목록확인() {
+// ============================================
+// 2. 종합 분석 함수 (최근 6개월)
+// ============================================
+function runSummaryAnalysis() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-  const destinations = detectDestinations(sheet);
-  const sourceData = getSourceData(sheet);
+  const ui = SpreadsheetApp.getUi();
 
-  const categories = {};
-  sourceData.forEach(row => {
-    const cat = String(row[3]).trim();
-    categories[cat] = (categories[cat] || 0) + 1;
+  try {
+    ss.toast('시트를 탐색하는 중...', '분석 시작', 3);
+
+    // 동적으로 모든 보고서 시트 찾기
+    const { campaignSheets, searchSheets } = findReportSheets(ss);
+
+    if (searchSheets.length === 0) {
+      ui.alert('오류', '검색어 보고서 시트를 찾을 수 없습니다.\n시트 이름에 "검색어 보고서"가 포함되어야 합니다.', ui.ButtonSet.OK);
+      return;
+    }
+
+    ss.toast('데이터를 불러오는 중...', '진행 중', 3);
+
+    // 최근 6개월만 선택
+    const recentSearchSheets = searchSheets.slice(-6);
+    const recentCampaignSheets = campaignSheets.slice(-6);
+
+    // 데이터 수집
+    // 총계용: 모든 데이터 포함 (filterInvalid=false)
+    // 검색어 분석용: 유효한 키워드만 (filterInvalid=true)
+    const searchDataAll = {};  // 총계 계산용 (전체)
+    const searchDataFiltered = {};  // 검색어 분석용 (필터링)
+    const campaignData = {};
+
+    recentSearchSheets.forEach(s => {
+      searchDataAll[s.month] = getReportData(ss, s.name, false); // 전체 데이터
+      searchDataFiltered[s.month] = getReportData(ss, s.name, true); // 유효 키워드만
+    });
+
+    recentCampaignSheets.forEach(s => {
+      campaignData[s.month] = getReportData(ss, s.name, false); // 전체 데이터
+    });
+
+    const months = recentSearchSheets.map(s => s.month);
+    const latestMonth = months[months.length - 1];
+    const prevMonth = months.length > 1 ? months[months.length - 2] : null;
+
+    ss.toast('데이터 분석 중...', '진행 중', 3);
+
+    // 분석 실행
+    const analysis = {
+      months: months,
+      latestMonth: latestMonth,
+      prevMonth: prevMonth,
+      summaryByMonth: {},
+      byTypeByMonth: {},
+      byDistanceByMonth: {},
+      // 검색어 보고서 기준 Top/Bottom (필터링된 데이터 사용)
+      topKeywords: searchDataFiltered[latestMonth] ? getTopItems(searchDataFiltered[latestMonth], 'ctr', 10, true) : [],
+      bottomKeywords: searchDataFiltered[latestMonth] ? getTopItems(searchDataFiltered[latestMonth], 'ctr', 10, false) : [],
+      topCpcKeywords: searchDataFiltered[latestMonth] ? getTopItems(searchDataFiltered[latestMonth], 'cpc', 10, false) : [],
+      bottomCpcKeywords: searchDataFiltered[latestMonth] ? getTopItems(searchDataFiltered[latestMonth], 'cpc', 10, true) : [],
+      // 검색어 인사이트 (필터링된 데이터 사용)
+      topSearchTerms: searchDataFiltered[latestMonth] ? getTopSearchTerms(searchDataFiltered[latestMonth], 10) : [],
+      bottomSearchTerms: searchDataFiltered[latestMonth] ? getBottomSearchTerms(searchDataFiltered[latestMonth], 10) : [],
+      monthComparison: null
+    };
+
+    // 각 월별 분석 - 총계는 전체 데이터 사용 (캠페인 또는 검색어 전체)
+    months.forEach(month => {
+      const data = campaignData[month] || searchDataAll[month];
+      if (data) {
+        analysis.summaryByMonth[month] = calculateSummary(data);
+        analysis.byTypeByMonth[month] = analyzeByType(data);
+        analysis.byDistanceByMonth[month] = analyzeByDistance(data);
+      }
+    });
+
+    // 최근 2개월 비교
+    if (prevMonth && analysis.summaryByMonth[prevMonth] && analysis.summaryByMonth[latestMonth]) {
+      analysis.monthComparison = compareMonths(
+        analysis.summaryByMonth[prevMonth],
+        analysis.summaryByMonth[latestMonth]
+      );
+    }
+
+    ss.toast('제언 생성 중...', '진행 중', 3);
+    const recommendations = generateRecommendations(analysis);
+
+    ss.toast('결과 출력 중...', '진행 중', 3);
+    writeToSummarySheet(ss, analysis, recommendations);
+
+    ss.toast('종합 분석이 완료되었습니다!', '완료', 5);
+
+  } catch (error) {
+    ui.alert('오류 발생', '분석 중 오류가 발생했습니다: ' + error.message, ui.ButtonSet.OK);
+    Logger.log(error);
+  }
+}
+
+// ============================================
+// 2-1. 월별 분석 함수
+// ============================================
+function runMonthlyAnalysis() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+
+  try {
+    // 사용 가능한 월 찾기
+    const { campaignSheets, searchSheets } = findReportSheets(ss);
+    const availableMonths = searchSheets.map(s => s.month);
+
+    if (availableMonths.length === 0) {
+      ui.alert('오류', '검색어 보고서 시트를 찾을 수 없습니다.', ui.ButtonSet.OK);
+      return;
+    }
+
+    // 월 선택 프롬프트
+    const response = ui.prompt(
+      '📅 월별 분석',
+      '분석할 월을 입력하세요.\n\n사용 가능: ' + availableMonths.join(', ') + '\n\n예: 1월',
+      ui.ButtonSet.OK_CANCEL
+    );
+
+    if (response.getSelectedButton() !== ui.Button.OK) {
+      return;
+    }
+
+    const selectedMonth = response.getResponseText().trim();
+
+    // 유효성 검사
+    if (!availableMonths.includes(selectedMonth)) {
+      ui.alert('오류', '잘못된 월입니다. 다시 시도해주세요.\n사용 가능: ' + availableMonths.join(', '), ui.ButtonSet.OK);
+      return;
+    }
+
+    ss.toast(selectedMonth + ' 데이터를 불러오는 중...', '진행 중', 3);
+
+    // 해당 월 데이터 가져오기
+    const searchSheet = searchSheets.find(s => s.month === selectedMonth);
+    const campaignSheet = campaignSheets.find(s => s.month === selectedMonth);
+
+    // 총계용: 전체 데이터, 검색어 분석용: 필터링된 데이터
+    const searchDataAll = searchSheet ? getReportData(ss, searchSheet.name, false) : [];
+    const searchDataFiltered = searchSheet ? getReportData(ss, searchSheet.name, true) : [];
+    const campaignData = campaignSheet ? getReportData(ss, campaignSheet.name, false) : [];
+
+    // 이전 월 찾기 (비교용)
+    const monthIndex = availableMonths.indexOf(selectedMonth);
+    const prevMonth = monthIndex > 0 ? availableMonths[monthIndex - 1] : null;
+    let prevSearchDataAll = null;
+    let prevCampaignData = null;
+
+    if (prevMonth) {
+      const prevSearchSheet = searchSheets.find(s => s.month === prevMonth);
+      const prevCampaignSheet = campaignSheets.find(s => s.month === prevMonth);
+      prevSearchDataAll = prevSearchSheet ? getReportData(ss, prevSearchSheet.name, false) : [];
+      prevCampaignData = prevCampaignSheet ? getReportData(ss, prevCampaignSheet.name, false) : [];
+    }
+
+    ss.toast('데이터 분석 중...', '진행 중', 3);
+
+    // 총계 계산용 데이터 선택
+    const summaryData = campaignData.length > 0 ? campaignData : searchDataAll;
+    const prevSummaryData = prevMonth ? (prevCampaignData && prevCampaignData.length > 0 ? prevCampaignData : prevSearchDataAll) : null;
+
+    // 월별 분석
+    const analysis = {
+      selectedMonth: selectedMonth,
+      prevMonth: prevMonth,
+      // 현재 월 요약 (전체 데이터)
+      summary: calculateSummary(summaryData),
+      prevSummary: prevSummaryData ? calculateSummary(prevSummaryData) : null,
+      // 캠페인유형별 (전체 데이터)
+      byType: analyzeByType(summaryData),
+      // 거리별 (전체 데이터)
+      byDistance: analyzeByDistance(summaryData),
+      // 키워드 분석 (필터링된 검색어 데이터)
+      topKeywords: getTopItems(searchDataFiltered, 'ctr', 10, true),
+      bottomKeywords: getTopItems(searchDataFiltered, 'ctr', 10, false),
+      topCpcKeywords: getTopItems(searchDataFiltered, 'cpc', 10, false),
+      bottomCpcKeywords: getTopItems(searchDataFiltered, 'cpc', 10, true),
+      // 검색어 분석 (필터링된 데이터)
+      topSearchTerms: getTopSearchTerms(searchDataFiltered, 10),
+      bottomSearchTerms: getBottomSearchTerms(searchDataFiltered, 10),
+      // 월별 비교
+      monthComparison: null
+    };
+
+    if (prevMonth && analysis.prevSummary) {
+      analysis.monthComparison = compareMonths(analysis.prevSummary, analysis.summary);
+    }
+
+    ss.toast('결과 출력 중...', '진행 중', 3);
+    writeToMonthlySheet(ss, analysis);
+
+    ss.toast(selectedMonth + ' 분석이 완료되었습니다!', '완료', 5);
+
+  } catch (error) {
+    ui.alert('오류 발생', '분석 중 오류가 발생했습니다: ' + error.message, ui.ButtonSet.OK);
+    Logger.log(error);
+  }
+}
+
+// 보고서 시트 찾기
+function findReportSheets(ss) {
+  const sheets = ss.getSheets();
+  const campaignSheets = [];
+  const searchSheets = [];
+
+  sheets.forEach(sheet => {
+    const name = sheet.getName();
+    // 키워드 보고서 = 캠페인 보고서로 취급
+    if (name.includes('키워드 보고서') || name.includes('캠페인 보고서')) {
+      const month = extractMonth(name);
+      if (month) campaignSheets.push({ name, month, order: getMonthOrder(month) });
+    } else if (name.includes('검색어 보고서')) {
+      const month = extractMonth(name);
+      if (month) searchSheets.push({ name, month, order: getMonthOrder(month) });
+    }
   });
 
-  let info = '=== 현재 분류 목록 ===\n\n';
-  info += '[데이터 분류]\n';
-  Object.keys(categories).forEach(cat => {
-    const hasHeader = destinations[cat] ? 'O' : 'X';
-    info += '[' + hasHeader + '] ' + cat + ': ' + categories[cat] + '개\n';
-  });
-  info += '\n(O=헤더있음, X=헤더없음)\n\n';
+  // 월 순서대로 정렬
+  campaignSheets.sort((a, b) => a.order - b.order);
+  searchSheets.sort((a, b) => a.order - b.order);
 
-  info += '[헤더에서 감지된 분류]\n';
-  if (Object.keys(destinations).length === 0) {
-    info += '(감지된 분류 없음)\n';
-  } else {
-    Object.keys(destinations).forEach(cat => {
-      const dest = destinations[cat];
-      const startLetter = columnToLetter(dest.startCol);
-      const endLetter = columnToLetter(dest.categoryCol);
-      info += '- ' + cat + ': ' + startLetter + '-' + endLetter + '열\n';
+  return { campaignSheets, searchSheets };
+}
+
+// 시트 이름에서 월 추출 (예: "12월 키워드 보고서" -> "12월")
+function extractMonth(sheetName) {
+  const match = sheetName.match(/(\d{1,2}월)/);
+  return match ? match[1] : null;
+}
+
+// 월을 정렬 순서로 변환 (1월=1, 12월=12)
+function getMonthOrder(month) {
+  const num = parseInt(month.replace('월', ''));
+  return num;
+}
+
+// ============================================
+// 3. 데이터 읽기 함수
+// ============================================
+function getReportData(ss, sheetName, filterInvalid) {
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    throw new Error('시트를 찾을 수 없습니다: ' + sheetName);
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const result = [];
+
+  // 헤더 행 찾기 (캠페인유형이 있는 행)
+  let headerRow = -1;
+  for (let i = 0; i < Math.min(5, data.length); i++) {
+    if (data[i][0] === '캠페인유형') {
+      headerRow = i;
+      break;
+    }
+  }
+
+  if (headerRow === -1) {
+    throw new Error('헤더를 찾을 수 없습니다: ' + sheetName);
+  }
+
+  // 데이터 파싱
+  for (let i = headerRow + 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0] || row[0] === '') continue; // 빈 행 스킵
+
+    const keyword = row[3];
+
+    // 이상치 필터링: 키워드가 "-" 이거나 빈 값이면 스킵
+    if (filterInvalid && (!keyword || keyword === '-' || keyword === '')) {
+      continue;
+    }
+
+    result.push({
+      type: row[0],           // 캠페인유형
+      campaign: row[1],       // 캠페인
+      adGroup: row[2],        // 광고그룹
+      keyword: keyword,       // 키워드 또는 검색어
+      impressions: parseNumber(row[4]),  // 노출수
+      clicks: parseNumber(row[5]),       // 클릭수
+      ctr: parsePercent(row[6]),         // 클릭률
+      cpc: parseNumber(row[7]),          // 평균클릭비용
+      cost: parseNumber(row[8])          // 총비용
     });
   }
 
-  showMessage(info);
+  return result;
 }
 
-/**
- * 현재 설정 확인
- */
-function 설정확인() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-  const destinations = detectDestinations(sheet);
-
-  let info = '=== 현재 설정 ===\n\n';
-  info += '소스 데이터: A~D열 (빅데이터)\n';
-  info += '데이터 시작 행: ' + CONFIG.SOURCE.START_ROW + '행\n';
-  info += '헤더 스캔 행: ' + CONFIG.HEADER_SCAN_ROW + '행\n';
-  info += '정렬: M(모바일) 검색량 높은순\n\n';
-  info += '[헤더에서 자동 감지된 분류 영역]\n';
-
-  if (Object.keys(destinations).length === 0) {
-    info += '(감지된 분류 없음)\n';
-    info += '\n2행의 I, N, S, X, AC열 등에 분류명을 입력하세요.';
-  } else {
-    Object.keys(destinations).forEach(cat => {
-      const dest = destinations[cat];
-      const startLetter = columnToLetter(dest.startCol);
-      const endLetter = columnToLetter(dest.categoryCol);
-      info += '  - ' + cat + ' -> ' + startLetter + '-' + endLetter + '열\n';
-    });
-  }
-
-  showMessage(info);
+function parseNumber(value) {
+  if (typeof value === 'number') return value;
+  if (!value) return 0;
+  return parseFloat(String(value).replace(/,/g, '')) || 0;
 }
 
-/**
- * 도움말
- */
-function 도움말() {
-  const help =
-'=== 키워드 분류 도구 ===\n\n' +
-'[구조]\n' +
-'1행: 날짜/제목\n' +
-'2행: 헤더 (키워드, PC, M, 분류)\n' +
-'3행~: 데이터\n\n' +
-'A~D열: 빅데이터 (모든 키워드)\n' +
-'우측 영역: 분류별 자동 미러링\n\n' +
-'[자동 감지 방식]\n' +
-'2행의 I, N, S, X, AC열(4열 단위 마지막)에\n' +
-'분류명을 입력하면 자동으로 인식됩니다.\n\n' +
-'예: I2="질환" -> F-I열이 질환 영역\n' +
-'    N2="병원&시술" -> K-N열이 병원&시술 영역\n\n' +
-'[사용법]\n' +
-'1. 2행 헤더에 분류명 설정\n' +
-'2. A~D열에 키워드 데이터 입력 (3행부터)\n' +
-'3. 메뉴 -> 키워드 도구 -> 키워드 분류 실행\n' +
-'4. M검색량 높은순으로 자동 정렬되어 배치';
-
-  showMessage(help);
+function parsePercent(value) {
+  if (typeof value === 'number') return value;
+  if (!value) return 0;
+  return parseFloat(String(value).replace('%', '')) || 0;
 }
 
-/**
- * 열 번호를 알파벳으로 변환
- */
-function columnToLetter(column) {
-  let letter = '';
-  while (column > 0) {
-    const temp = (column - 1) % 26;
-    letter = String.fromCharCode(temp + 65) + letter;
-    column = Math.floor((column - temp - 1) / 26);
-  }
-  return letter;
-}
+// ============================================
+// 4. 분석 로직
+// ============================================
 
-// ========================================
-// 네이버 검색광고 API 연동
-// ========================================
-
-/**
- * 네이버 API 서명 생성
- * 참고: https://github.com/naver/searchad-apidoc
- * message = "{timestamp}.{method}.{uri}"
- * HMAC-SHA256(message, secret_key) -> base64
- */
-function generateSignature(timestamp, method, path) {
-  const message = timestamp + '.' + method + '.' + path;
-
-  // Google Apps Script에서 HMAC-SHA256 생성
-  // message와 secret_key 모두 UTF-8 바이트로 변환
-  const messageBytes = Utilities.newBlob(message).getBytes();
-  const keyBytes = Utilities.newBlob(CONFIG.NAVER_API.SECRET_KEY).getBytes();
-
-  const signature = Utilities.computeHmacSha256Signature(messageBytes, keyBytes);
-  return Utilities.base64Encode(signature);
-}
-
-/**
- * 네이버 API 호출
- */
-function callNaverApi(method, path, payload) {
-  const timestamp = String(new Date().getTime());
-  const signature = generateSignature(timestamp, method, path);
-
-  const options = {
-    method: method,
-    headers: {
-      'X-Timestamp': timestamp,
-      'X-API-KEY': CONFIG.NAVER_API.ACCESS_LICENSE,
-      'X-Customer': CONFIG.NAVER_API.CUSTOMER_ID,
-      'X-Signature': signature,
-      'Content-Type': 'application/json'
-    },
-    muteHttpExceptions: true
+// 전체 요약 계산
+function calculateSummary(data) {
+  const summary = {
+    totalImpressions: 0,
+    totalClicks: 0,
+    totalCost: 0,
+    count: data.length
   };
 
-  if (payload) {
-    options.payload = JSON.stringify(payload);
-  }
+  data.forEach(item => {
+    summary.totalImpressions += item.impressions;
+    summary.totalClicks += item.clicks;
+    summary.totalCost += item.cost;
+  });
 
-  const url = CONFIG.NAVER_API.BASE_URL + path;
-  const response = UrlFetchApp.fetch(url, options);
-  const responseCode = response.getResponseCode();
-  const responseText = response.getContentText();
+  summary.avgCtr = summary.totalImpressions > 0
+    ? (summary.totalClicks / summary.totalImpressions * 100)
+    : 0;
+  summary.avgCpc = summary.totalClicks > 0
+    ? (summary.totalCost / summary.totalClicks)
+    : 0;
 
-  if (responseCode !== 200) {
-    throw new Error('API 오류 (' + responseCode + '): ' + responseText);
-  }
-
-  return JSON.parse(responseText);
+  return summary;
 }
 
-/**
- * 키워드 검색량 조회 (네이버 API)
- */
-function getKeywordStats(keywords) {
-  if (!keywords || keywords.length === 0) return {};
+// 캠페인유형별 분석
+function analyzeByType(data) {
+  const types = {};
 
-  // 최대 100개씩 처리
-  const results = {};
-  const chunkSize = 100;
-
-  for (let i = 0; i < keywords.length; i += chunkSize) {
-    const chunk = keywords.slice(i, i + chunkSize);
-    const payload = {
-      hintKeywords: chunk,
-      showDetail: '1'
-    };
-
-    try {
-      const response = callNaverApi('POST', '/keywordstool', payload);
-
-      if (response.keywordList) {
-        response.keywordList.forEach(item => {
-          results[item.relKeyword] = {
-            pc: item.monthlyPcQcCnt === '< 10' ? 0 : parseInt(item.monthlyPcQcCnt) || 0,
-            mobile: item.monthlyMobileQcCnt === '< 10' ? 0 : parseInt(item.monthlyMobileQcCnt) || 0
-          };
-        });
-      }
-    } catch (e) {
-      console.error('API 호출 실패:', e.message);
+  data.forEach(item => {
+    if (!types[item.type]) {
+      types[item.type] = {
+        impressions: 0,
+        clicks: 0,
+        cost: 0,
+        count: 0
+      };
     }
+    types[item.type].impressions += item.impressions;
+    types[item.type].clicks += item.clicks;
+    types[item.type].cost += item.cost;
+    types[item.type].count++;
+  });
 
-    // API 속도 제한 방지
-    if (i + chunkSize < keywords.length) {
-      Utilities.sleep(500);
-    }
-  }
+  // CTR, CPC 계산
+  Object.keys(types).forEach(type => {
+    const t = types[type];
+    t.ctr = t.impressions > 0 ? (t.clicks / t.impressions * 100) : 0;
+    t.cpc = t.clicks > 0 ? (t.cost / t.clicks) : 0;
+  });
 
-  return results;
+  return types;
 }
 
-/**
- * 키워드 검색량 조회 (진행 상황 표시 버전)
- */
-function getKeywordStatsWithProgress(keywords, ss) {
-  if (!keywords || keywords.length === 0) return {};
+// 거리별 분석 (캠페인명에서 추출)
+function analyzeByDistance(data) {
+  const distances = {
+    '1km': { impressions: 0, clicks: 0, cost: 0, count: 0 },
+    '3km': { impressions: 0, clicks: 0, cost: 0, count: 0 },
+    '5km': { impressions: 0, clicks: 0, cost: 0, count: 0 },
+    '10km': { impressions: 0, clicks: 0, cost: 0, count: 0 },
+    '전국': { impressions: 0, clicks: 0, cost: 0, count: 0 },
+    '기타': { impressions: 0, clicks: 0, cost: 0, count: 0 }
+  };
 
-  const results = {};
-  const chunkSize = 100;
-  const totalChunks = Math.ceil(keywords.length / chunkSize);
+  data.forEach(item => {
+    let distance = '기타';
+    const campaign = item.campaign || '';
 
-  for (let i = 0; i < keywords.length; i += chunkSize) {
-    const chunkNum = Math.floor(i / chunkSize) + 1;
-    const chunk = keywords.slice(i, i + chunkSize);
+    if (campaign.includes('1km')) distance = '1km';
+    else if (campaign.includes('3km')) distance = '3km';
+    else if (campaign.includes('5km')) distance = '5km';
+    else if (campaign.includes('10km')) distance = '10km';
+    else if (campaign.includes('전국')) distance = '전국';
 
-    // 진행 상황 토스트 표시
-    ss.toast(
-      'API 호출 중... (' + chunkNum + '/' + totalChunks + ' 배치)\n' +
-      '처리: ' + Math.min(i + chunkSize, keywords.length) + '/' + keywords.length + '개',
-      '네이버 API',
-      -1
-    );
+    distances[distance].impressions += item.impressions;
+    distances[distance].clicks += item.clicks;
+    distances[distance].cost += item.cost;
+    distances[distance].count++;
+  });
 
-    const payload = {
-      hintKeywords: chunk,
-      showDetail: '1'
-    };
+  // CTR, CPC 계산
+  Object.keys(distances).forEach(d => {
+    const dist = distances[d];
+    dist.ctr = dist.impressions > 0 ? (dist.clicks / dist.impressions * 100) : 0;
+    dist.cpc = dist.clicks > 0 ? (dist.cost / dist.clicks) : 0;
+  });
 
-    try {
-      const response = callNaverApi('POST', '/keywordstool', payload);
-
-      if (response.keywordList) {
-        response.keywordList.forEach(item => {
-          results[item.relKeyword] = {
-            pc: item.monthlyPcQcCnt === '< 10' ? 0 : parseInt(item.monthlyPcQcCnt) || 0,
-            mobile: item.monthlyMobileQcCnt === '< 10' ? 0 : parseInt(item.monthlyMobileQcCnt) || 0
-          };
-        });
-      }
-    } catch (e) {
-      console.error('API 호출 실패:', e.message);
-      ss.toast('API 오류: ' + e.message, '오류', 3);
-    }
-
-    // API 속도 제한 방지
-    if (i + chunkSize < keywords.length) {
-      Utilities.sleep(500);
-    }
-  }
-
-  return results;
+  return distances;
 }
 
-/**
- * A열 키워드의 검색량 자동 조회 (B, C열에 입력)
- */
-function 검색량조회() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-  const ui = SpreadsheetApp.getUi();
+// Top/Bottom 아이템 추출 (클릭 10회 이상만)
+function getTopItems(data, metric, count, descending) {
+  if (!data || data.length === 0) return [];
 
-  // 확인 메시지
-  const confirm = ui.alert(
-    '검색량 조회',
-    'A열의 키워드 검색량을 네이버 API로 조회합니다.\n' +
-    'B열(PC)과 C열(M)에 검색량이 입력됩니다.\n\n' +
-    '계속하시겠습니까?',
-    ui.ButtonSet.YES_NO
+  // 클릭 10회 이상, 키워드 유효한 것만 필터링
+  const filtered = data.filter(item =>
+    item.clicks >= 10 &&
+    item.keyword &&
+    item.keyword !== '-' &&
+    item.keyword !== ''
   );
 
-  if (confirm !== ui.Button.YES) return;
+  const sorted = [...filtered].sort((a, b) => {
+    const valA = a[metric] || 0;
+    const valB = b[metric] || 0;
+    return descending ? valB - valA : valA - valB;
+  });
 
-  try {
-    const lastRow = sheet.getLastRow();
-    if (lastRow < CONFIG.SOURCE.START_ROW) {
-      showMessage('조회할 키워드가 없습니다.');
-      return;
-    }
-
-    // A열에서 키워드 가져오기
-    const keywordRange = sheet.getRange(
-      CONFIG.SOURCE.START_ROW,
-      CONFIG.SOURCE.KEYWORD_COL,
-      lastRow - CONFIG.SOURCE.START_ROW + 1,
-      1
-    );
-    const keywordValues = keywordRange.getValues();
-    const keywords = keywordValues.map(row => String(row[0]).trim()).filter(k => k);
-
-    if (keywords.length === 0) {
-      showMessage('조회할 키워드가 없습니다.');
-      return;
-    }
-
-    // 토스트로 시작 알림
-    ss.toast('검색량 조회 시작... (' + keywords.length + '개 키워드)', '진행 중', -1);
-
-    // 네이버 API로 검색량 조회 (진행 상황 표시 버전)
-    const stats = getKeywordStatsWithProgress(keywords, ss);
-
-    // B, C열에 검색량 입력 (실시간 업데이트)
-    ss.toast('검색량을 시트에 입력 중...', '진행 중', -1);
-    let updatedCount = 0;
-    for (let i = 0; i < keywordValues.length; i++) {
-      const keyword = String(keywordValues[i][0]).trim();
-      if (keyword && stats[keyword]) {
-        const row = CONFIG.SOURCE.START_ROW + i;
-        sheet.getRange(row, CONFIG.SOURCE.PC_COL).setValue(stats[keyword].pc);
-        sheet.getRange(row, CONFIG.SOURCE.M_COL).setValue(stats[keyword].mobile);
-        updatedCount++;
-
-        // 10개마다 화면 갱신
-        if (updatedCount % 10 === 0) {
-          SpreadsheetApp.flush();
-          ss.toast(updatedCount + '개 입력 완료...', '진행 중', -1);
-        }
-      }
-    }
-    SpreadsheetApp.flush();
-
-    showMessage('검색량 조회 완료!\n\n' +
-      '- 조회 키워드: ' + keywords.length + '개\n' +
-      '- 업데이트: ' + updatedCount + '개');
-
-  } catch (error) {
-    showMessage('오류 발생: ' + error.message);
-    console.error(error);
-  }
+  return sorted.slice(0, count);
 }
 
-/**
- * 선택한 셀의 키워드만 검색량 조회
- */
-function 선택키워드검색량조회() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-  const selection = sheet.getActiveRange();
+// 검색어 Top 추출 (CPC 낮은 순 = 효율 좋은 것, 클릭 10회 이상)
+function getTopSearchTerms(data, count) {
+  if (!data || data.length === 0) return [];
 
-  if (!selection) {
-    showMessage('키워드를 선택해주세요.');
-    return;
+  const filtered = data.filter(item =>
+    item.clicks >= 10 &&
+    item.keyword &&
+    item.keyword !== '-'
+  );
+
+  // CPC 낮은 순 = 효율 좋은 검색어
+  const sorted = filtered.sort((a, b) => a.cpc - b.cpc);
+  return sorted.slice(0, count);
+}
+
+// 검색어 Bottom 추출 (CPC 높은 순 = 비효율, 클릭 10회 이상)
+function getBottomSearchTerms(data, count) {
+  if (!data || data.length === 0) return [];
+
+  const filtered = data.filter(item =>
+    item.clicks >= 10 &&
+    item.keyword &&
+    item.keyword !== '-'
+  );
+
+  // CPC 높은 순 = 비효율 검색어
+  const sorted = filtered.sort((a, b) => b.cpc - a.cpc);
+  return sorted.slice(0, count);
+}
+
+// 월별 비교
+function compareMonths(decSummary, janSummary) {
+  const calcChange = (dec, jan) => {
+    if (dec === 0) return jan > 0 ? 100 : 0;
+    return ((jan - dec) / dec * 100);
+  };
+
+  return {
+    impressionsChange: calcChange(decSummary.totalImpressions, janSummary.totalImpressions),
+    clicksChange: calcChange(decSummary.totalClicks, janSummary.totalClicks),
+    costChange: calcChange(decSummary.totalCost, janSummary.totalCost),
+    ctrChange: janSummary.avgCtr - decSummary.avgCtr,
+    cpcChange: calcChange(decSummary.avgCpc, janSummary.avgCpc)
+  };
+}
+
+// ============================================
+// 5. 종합 제언 생성 (CPC 중심)
+// ============================================
+function generateRecommendations(analysis) {
+  const recommendations = [];
+  const latestMonth = analysis.latestMonth;
+  const prevMonth = analysis.prevMonth;
+
+  // 1. 캠페인유형별 제언 (CPC 기준)
+  const latestTypes = analysis.byTypeByMonth[latestMonth];
+  if (latestTypes) {
+    const typeEntries = Object.entries(latestTypes)
+      .filter(([k, v]) => v.clicks >= 10) // 클릭 10회 이상만
+      .sort((a, b) => a[1].cpc - b[1].cpc); // CPC 낮은 순
+
+    if (typeEntries.length >= 2) {
+      const bestType = typeEntries[0]; // CPC 가장 낮은 유형
+      const worstType = typeEntries[typeEntries.length - 1]; // CPC 가장 높은 유형
+
+      if (worstType[1].cpc > bestType[1].cpc * 1.5) {
+        recommendations.push({
+          category: '예산 재배분',
+          content: `${bestType[0]}의 CPC(${formatCurrency(bestType[1].cpc)})가 ${worstType[0]}(${formatCurrency(worstType[1].cpc)})보다 효율적입니다. ${bestType[0]} 예산 확대를 권고합니다.`
+        });
+      }
+    }
   }
 
-  try {
-    const values = selection.getValues();
-    const keywords = [];
+  // 2. 거리별 제언 (CPC 기준)
+  const latestDist = analysis.byDistanceByMonth[latestMonth];
+  if (latestDist) {
+    const distEntries = Object.entries(latestDist)
+      .filter(([k, v]) => v.clicks >= 10 && k !== '기타')
+      .sort((a, b) => a[1].cpc - b[1].cpc); // CPC 낮은 순
 
-    values.forEach(row => {
-      row.forEach(cell => {
-        const keyword = String(cell).trim();
-        if (keyword) keywords.push(keyword);
+    if (distEntries.length > 0) {
+      const bestDist = distEntries[0];
+      recommendations.push({
+        category: '타겟팅 최적화',
+        content: `${bestDist[0]} 반경 타겟팅의 CPC(${formatCurrency(bestDist[1].cpc)})가 가장 효율적입니다. 해당 반경 중심으로 예산 집중을 권고합니다.`
       });
-    });
-
-    if (keywords.length === 0) {
-      showMessage('선택한 영역에 키워드가 없습니다.');
-      return;
-    }
-
-    // 네이버 API로 검색량 조회
-    const stats = getKeywordStats(keywords);
-
-    // 결과 표시
-    let result = '=== 검색량 조회 결과 ===\n\n';
-    keywords.forEach(keyword => {
-      if (stats[keyword]) {
-        result += keyword + '\n';
-        result += '  PC: ' + stats[keyword].pc.toLocaleString() + '\n';
-        result += '  M: ' + stats[keyword].mobile.toLocaleString() + '\n\n';
-      } else {
-        result += keyword + ': 데이터 없음\n\n';
-      }
-    });
-
-    showMessage(result);
-
-  } catch (error) {
-    showMessage('오류 발생: ' + error.message);
-    console.error(error);
-  }
-}
-
-// ========================================
-// 전체 시트 일괄 처리
-// ========================================
-
-/**
- * 전체 시트 키워드 분류 실행
- */
-function 전체시트분류() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = ss.getSheets();
-  const ui = SpreadsheetApp.getUi();
-
-  // 시트 목록 확인
-  const sheetNames = sheets.map(s => s.getName()).join('\n- ');
-  const confirm = ui.alert(
-    '전체 시트 분류',
-    '다음 시트들에서 키워드 분류를 실행합니다:\n\n- ' + sheetNames + '\n\n계속하시겠습니까?',
-    ui.ButtonSet.YES_NO
-  );
-
-  if (confirm !== ui.Button.YES) return;
-
-  let totalReport = '=== 전체 시트 분류 결과 ===\n\n';
-  let processedCount = 0;
-
-  sheets.forEach(sheet => {
-    try {
-      const destinations = detectDestinations(sheet);
-
-      // 분류 영역이 없으면 스킵
-      if (Object.keys(destinations).length === 0) {
-        totalReport += '[' + sheet.getName() + '] 분류 영역 없음 (스킵)\n';
-        return;
-      }
-
-      const sourceData = getSourceDataFromSheet(sheet);
-
-      if (sourceData.length === 0) {
-        totalReport += '[' + sheet.getName() + '] 데이터 없음 (스킵)\n';
-        return;
-      }
-
-      const groupedData = groupByCategory(sourceData);
-      distributeData(sheet, groupedData, destinations);
-
-      const count = Object.values(groupedData).reduce((sum, arr) => sum + arr.length, 0);
-      totalReport += '[' + sheet.getName() + '] ' + count + '개 키워드 분류 완료\n';
-      processedCount++;
-
-    } catch (e) {
-      totalReport += '[' + sheet.getName() + '] 오류: ' + e.message + '\n';
-    }
-  });
-
-  totalReport += '\n총 ' + processedCount + '개 시트 처리됨';
-  showMessage(totalReport);
-}
-
-/**
- * 전체 시트 검색량 조회
- */
-function 전체시트검색량조회() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = ss.getSheets();
-  const ui = SpreadsheetApp.getUi();
-
-  // 시트 목록 확인
-  const sheetNames = sheets.map(s => s.getName()).join('\n- ');
-  const confirm = ui.alert(
-    '전체 시트 검색량 조회',
-    '다음 시트들에서 검색량을 조회합니다:\n\n- ' + sheetNames + '\n\n' +
-    '각 시트의 A열 키워드를 조회하여 B,C열에 입력합니다.\n계속하시겠습니까?',
-    ui.ButtonSet.YES_NO
-  );
-
-  if (confirm !== ui.Button.YES) return;
-
-  let totalReport = '=== 전체 시트 검색량 조회 결과 ===\n\n';
-  let totalKeywords = 0;
-
-  sheets.forEach(sheet => {
-    try {
-      const lastRow = sheet.getLastRow();
-      if (lastRow < CONFIG.SOURCE.START_ROW) {
-        totalReport += '[' + sheet.getName() + '] 데이터 없음 (스킵)\n';
-        return;
-      }
-
-      // A열에서 키워드 가져오기
-      const keywordRange = sheet.getRange(
-        CONFIG.SOURCE.START_ROW,
-        CONFIG.SOURCE.KEYWORD_COL,
-        lastRow - CONFIG.SOURCE.START_ROW + 1,
-        1
-      );
-      const keywordValues = keywordRange.getValues();
-      const keywords = keywordValues.map(row => String(row[0]).trim()).filter(k => k);
-
-      if (keywords.length === 0) {
-        totalReport += '[' + sheet.getName() + '] 키워드 없음 (스킵)\n';
-        return;
-      }
-
-      // 네이버 API로 검색량 조회
-      const stats = getKeywordStats(keywords);
-
-      // B, C열에 검색량 입력
-      let updatedCount = 0;
-      for (let i = 0; i < keywordValues.length; i++) {
-        const keyword = String(keywordValues[i][0]).trim();
-        if (keyword && stats[keyword]) {
-          const row = CONFIG.SOURCE.START_ROW + i;
-          sheet.getRange(row, CONFIG.SOURCE.PC_COL).setValue(stats[keyword].pc);
-          sheet.getRange(row, CONFIG.SOURCE.M_COL).setValue(stats[keyword].mobile);
-          updatedCount++;
-        }
-      }
-
-      totalReport += '[' + sheet.getName() + '] ' + updatedCount + '/' + keywords.length + '개 업데이트\n';
-      totalKeywords += updatedCount;
-
-    } catch (e) {
-      totalReport += '[' + sheet.getName() + '] 오류: ' + e.message + '\n';
-    }
-  });
-
-  totalReport += '\n총 ' + totalKeywords + '개 키워드 업데이트됨';
-  showMessage(totalReport);
-}
-
-/**
- * 특정 시트에서 소스 데이터 가져오기
- */
-function getSourceDataFromSheet(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < CONFIG.SOURCE.START_ROW) return [];
-
-  const range = sheet.getRange(
-    CONFIG.SOURCE.START_ROW,
-    1,
-    lastRow - CONFIG.SOURCE.START_ROW + 1,
-    4
-  );
-
-  const values = range.getValues();
-  return values.filter(row => row[0] && row[3]);
-}
-
-// ========================================
-// 입력 데이터 변환 기능
-// ========================================
-
-/**
- * 입력 데이터 변환
- * - A열 빈칸에 위의 검색키워드 채우기
- * - 카페가 있는 키워드 우선 정렬 (각 그룹 내에서)
- * - 검색키워드 중복 시 상단 그룹만 유지
- * - PC/M 검색량은 공란으로
- *
- * 입력 형식: A(검색키워드), B(주제키워드), C~E(콘텐츠영역)
- * 출력 형식: A(검색키워드), B(PC), C(M), D(주제키워드), E~G(콘텐츠영역)
- */
-function 데이터변환() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-  const ui = SpreadsheetApp.getUi();
-
-  // 입력 데이터는 1행=헤더, 2행부터 데이터
-  const INPUT_START_ROW = 2;
-
-  // 확인 메시지
-  const confirm = ui.alert(
-    '데이터 변환',
-    '입력 데이터를 변환합니다.\n\n' +
-    '[수행 작업]\n' +
-    '1. A열 빈칸에 위의 검색키워드 채우기\n' +
-    '2. 카페가 있는 키워드를 각 그룹 상위로 정렬\n' +
-    '3. 검색키워드 중복 시 상단 그룹만 유지\n' +
-    '4. PC/M 검색량은 공란으로\n\n' +
-    '계속하시겠습니까?',
-    ui.ButtonSet.YES_NO
-  );
-
-  if (confirm !== ui.Button.YES) return;
-
-  try {
-    const lastRow = sheet.getLastRow();
-    const lastCol = sheet.getLastColumn();
-
-    if (lastRow < INPUT_START_ROW) {
-      showMessage('데이터가 없습니다.');
-      return;
-    }
-
-    ss.toast('데이터 읽는 중...', '진행 중', -1);
-
-    // 데이터 범위 읽기 (A~E열 또는 더 많은 열) - 2행부터
-    const dataRange = sheet.getRange(
-      INPUT_START_ROW,
-      1,
-      lastRow - INPUT_START_ROW + 1,
-      Math.max(lastCol, 5)
-    );
-    const rawData = dataRange.getValues();
-
-    // 1. A열 빈칸 채우기 + 그룹화
-    ss.toast('A열 빈칸 채우기 및 그룹화 중...', '진행 중', -1);
-    const groups = fillAndGroup(rawData);
-
-    // 2. 중복 검색키워드 제거 (상단 그룹만 유지)
-    ss.toast('중복 제거 중...', '진행 중', -1);
-    const uniqueGroups = removeDuplicateGroups(groups);
-
-    // 3. 각 그룹 내에서 카페 우선 정렬
-    ss.toast('카페 우선 정렬 중...', '진행 중', -1);
-    const sortedGroups = sortGroupsByCafe(uniqueGroups);
-
-    // 4. 출력 형식으로 변환 (PC/M은 공란)
-    ss.toast('출력 형식으로 변환 중...', '진행 중', -1);
-    const outputData = convertToOutputFormat(sortedGroups);
-
-    // 5. 기존 데이터 삭제 후 새 데이터 입력
-    ss.toast('시트에 출력 중...', '진행 중', -1);
-
-    // A~G열까지의 기존 데이터 삭제 (1행 헤더 포함)
-    sheet.getRange(1, 1, lastRow, 7).clearContent();
-
-    // 헤더 입력 (1행)
-    const header = ['검색키워드', 'PC', 'M', '주제키워드', '콘텐츠영역', '콘텐츠영역', '콘텐츠영역'];
-    sheet.getRange(1, 1, 1, 7).setValues([header]);
-
-    // 새 데이터 입력 (2행부터)
-    if (outputData.length > 0) {
-      const dataRange = sheet.getRange(
-        INPUT_START_ROW,
-        1,
-        outputData.length,
-        outputData[0].length
-      );
-      dataRange.setValues(outputData);
-
-      // 전체 범위 가운데 정렬 (헤더 + 데이터)
-      sheet.getRange(1, 1, outputData.length + 1, 7)
-        .setHorizontalAlignment('center');
-    }
-
-    // 결과 보고
-    const originalRows = rawData.filter(row => row[0] || row[1]).length;
-    const resultRows = outputData.length;
-    const removedGroups = groups.length - uniqueGroups.length;
-
-    showMessage('데이터 변환 완료!\n\n' +
-      '- 원본 행: ' + originalRows + '개\n' +
-      '- 결과 행: ' + resultRows + '개\n' +
-      '- 제거된 중복 그룹: ' + removedGroups + '개\n' +
-      '- 고유 검색키워드: ' + uniqueGroups.length + '개');
-
-  } catch (error) {
-    showMessage('오류 발생: ' + error.message);
-    console.error(error);
-  }
-}
-
-/**
- * A열 빈칸 채우기 및 그룹화
- * 빈칸인 경우 위의 검색키워드를 채움
- * 같은 검색키워드를 가진 행들을 그룹으로 묶음
- */
-function fillAndGroup(data) {
-  const groups = [];
-  let currentKeyword = '';
-  let currentGroup = [];
-
-  data.forEach(row => {
-    const cellA = String(row[0] || '').trim();
-    const cellB = String(row[1] || '').trim();
-
-    // A열에 값이 있으면 새 그룹 시작
-    if (cellA !== '') {
-      // 이전 그룹 저장
-      if (currentGroup.length > 0) {
-        groups.push({
-          keyword: currentKeyword,
-          rows: currentGroup
-        });
-      }
-      currentKeyword = cellA;
-      currentGroup = [row];
-    } else if (cellB !== '') {
-      // A열은 비어있고 B열에 값이 있으면 현재 그룹에 추가
-      currentGroup.push(row);
-    }
-    // A, B 모두 비어있으면 무시
-  });
-
-  // 마지막 그룹 저장
-  if (currentGroup.length > 0) {
-    groups.push({
-      keyword: currentKeyword,
-      rows: currentGroup
-    });
-  }
-
-  return groups;
-}
-
-/**
- * 중복 검색키워드 제거 (상단 그룹만 유지)
- */
-function removeDuplicateGroups(groups) {
-  const seen = new Set();
-  const uniqueGroups = [];
-
-  groups.forEach(group => {
-    if (!seen.has(group.keyword)) {
-      seen.add(group.keyword);
-      uniqueGroups.push(group);
-    }
-  });
-
-  return uniqueGroups;
-}
-
-/**
- * 각 그룹 내에서 카페 개수 기준 정렬
- * 콘텐츠영역(C~E열)에 '카페'가 많은 행일수록 상위로
- * 3개 > 2개 > 1개 > 0개 (카페 없는 행도 하단에 유지)
- */
-function sortGroupsByCafe(groups) {
-  return groups.map(group => {
-    // 카페 개수 많은 순으로 정렬 (내림차순)
-    // 카페 없는 행(0개)도 하단에 유지
-    const sortedRows = [...group.rows].sort((a, b) => {
-      const cafeCountA = countCafe(a);
-      const cafeCountB = countCafe(b);
-      return cafeCountB - cafeCountA;
-    });
-
-    return {
-      keyword: group.keyword,
-      rows: sortedRows
-    };
-  });
-}
-
-/**
- * 행에서 '카페' 개수 세기
- * C, D, E열 (인덱스 2, 3, 4)에서 카페 포함된 셀 개수 반환
- */
-function countCafe(row) {
-  let count = 0;
-  for (let i = 2; i <= 4; i++) {
-    if (String(row[i] || '').includes('카페')) {
-      count++;
     }
   }
-  return count;
+
+  // 3. 고비용 비효율 검색어 제언 (CPC 높은 것)
+  if (analysis.bottomSearchTerms && analysis.bottomSearchTerms.length > 0) {
+    const highCpcTerms = analysis.bottomSearchTerms
+      .filter(k => k.cost >= 20000) // 비용 2만원 이상
+      .slice(0, 3);
+
+    if (highCpcTerms.length > 0) {
+      const keywordList = highCpcTerms.map(k => `${k.keyword}(CPC ${formatCurrency(k.cpc)})`).join(', ');
+      recommendations.push({
+        category: '비용 효율 점검',
+        content: `CPC 높은 검색어: ${keywordList}. 입찰가 조정 또는 제외 검색어 등록을 검토하세요.`
+      });
+    }
+  }
+
+  // 4. 고효율 검색어 제언 (CPC 낮은 것)
+  if (analysis.topSearchTerms && analysis.topSearchTerms.length > 0) {
+    const lowCpcTerms = analysis.topSearchTerms.slice(0, 3);
+
+    if (lowCpcTerms.length > 0) {
+      const termList = lowCpcTerms.map(s => `${s.keyword}(CPC ${formatCurrency(s.cpc)})`).join(', ');
+      recommendations.push({
+        category: '강화 권고',
+        content: `CPC 효율 좋은 검색어: ${termList}. 정확검색 키워드 추가 및 예산 확대를 권고합니다.`
+      });
+    }
+  }
+
+  // 5. 월별 CPC 변화 제언
+  if (analysis.monthComparison && prevMonth) {
+    const change = analysis.monthComparison;
+
+    if (change.cpcChange > 20) {
+      recommendations.push({
+        category: 'CPC 상승 주의',
+        content: `${latestMonth} CPC가 ${prevMonth} 대비 ${change.cpcChange.toFixed(1)}% 상승했습니다. 경쟁 심화 또는 품질지수 하락 가능성을 점검하세요.`
+      });
+    } else if (change.cpcChange < -10) {
+      recommendations.push({
+        category: 'CPC 개선',
+        content: `${latestMonth} CPC가 ${prevMonth} 대비 ${Math.abs(change.cpcChange).toFixed(1)}% 하락했습니다. 긍정적인 변화입니다.`
+      });
+    }
+
+    // 비용 대비 클릭 효율 체크
+    if (change.costChange > 20 && change.clicksChange < 10) {
+      recommendations.push({
+        category: '비용 효율 주의',
+        content: `비용은 ${change.costChange.toFixed(1)}% 증가했으나 클릭은 ${change.clicksChange.toFixed(1)}% 변화했습니다. 비용 대비 효율을 점검하세요.`
+      });
+    }
+  }
+
+  return recommendations;
 }
 
-/**
- * 출력 형식으로 변환
- * 입력: A(검색키워드), B(주제키워드), C~E(콘텐츠영역)
- * 출력: A(검색키워드), B(PC-공란), C(M-공란), D(주제키워드), E~G(콘텐츠영역)
- *
- * 모든 행에 검색키워드를 채워넣음 (빈칸 없이)
- */
-function convertToOutputFormat(groups) {
+// ============================================
+// 6. 결과 출력
+// ============================================
+function writeToSummarySheet(ss, analysis, recommendations) {
+  let sheet = ss.getSheetByName('종합');
+  if (!sheet) {
+    sheet = ss.insertSheet('종합');
+  }
+
+  // 시트 초기화
+  sheet.clear();
+
   const output = [];
+  const now = new Date();
+  const dateStr = Utilities.formatDate(now, 'Asia/Seoul', 'yyyy-MM-dd HH:mm');
+  const months = analysis.months;
+  const latestMonth = analysis.latestMonth;
+  const prevMonth = analysis.prevMonth;
 
-  groups.forEach(group => {
-    group.rows.forEach(row => {
-      const topicKeyword = row[1] || '';  // B열: 주제키워드
-      const content1 = row[2] || '';  // C열: 콘텐츠영역
-      const content2 = row[3] || '';  // D열: 콘텐츠영역
-      const content3 = row[4] || '';  // E열: 콘텐츠영역
+  // 제목
+  output.push(['📊 섬고짚 네이버광고 종합 분석 리포트']);
+  output.push(['분석일시: ' + dateStr]);
+  output.push(['분석 대상: ' + months.join(', ')]);
+  output.push(['']);
 
+  // ═══════════════════════════════════════
+  // 전체 요약 (모든 월 표시)
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['📌 전체 요약 (월별 추이)']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  // 동적 헤더 생성
+  const summaryHeader = ['지표', ...months];
+  if (prevMonth) summaryHeader.push('증감(' + prevMonth + '→' + latestMonth + ')');
+  output.push(summaryHeader);
+
+  // 총 노출수
+  const impressionsRow = ['총 노출수'];
+  months.forEach(m => impressionsRow.push(formatNumber(analysis.summaryByMonth[m].totalImpressions)));
+  if (analysis.monthComparison) impressionsRow.push(formatChange(analysis.monthComparison.impressionsChange));
+  output.push(impressionsRow);
+
+  // 총 클릭수
+  const clicksRow = ['총 클릭수'];
+  months.forEach(m => clicksRow.push(formatNumber(analysis.summaryByMonth[m].totalClicks)));
+  if (analysis.monthComparison) clicksRow.push(formatChange(analysis.monthComparison.clicksChange));
+  output.push(clicksRow);
+
+  // 총 비용
+  const costRow = ['총 비용'];
+  months.forEach(m => costRow.push(formatCurrency(analysis.summaryByMonth[m].totalCost)));
+  if (analysis.monthComparison) costRow.push(formatChange(analysis.monthComparison.costChange));
+  output.push(costRow);
+
+  // 평균 CTR
+  const ctrRow = ['평균 CTR'];
+  months.forEach(m => ctrRow.push(analysis.summaryByMonth[m].avgCtr.toFixed(2) + '%'));
+  if (analysis.monthComparison) ctrRow.push(formatChangePoint(analysis.monthComparison.ctrChange));
+  output.push(ctrRow);
+
+  // 평균 CPC
+  const cpcRow = ['평균 CPC'];
+  months.forEach(m => cpcRow.push(formatCurrency(analysis.summaryByMonth[m].avgCpc)));
+  if (analysis.monthComparison) cpcRow.push(formatChange(analysis.monthComparison.cpcChange));
+  output.push(cpcRow);
+
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // 캠페인유형별 성과 (최신 월)
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['📈 캠페인유형별 성과 (' + latestMonth + ')']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['유형', '노출수', '클릭수', 'CTR', '비용', 'CPC']);
+  const latestTypeData = analysis.byTypeByMonth[latestMonth];
+  if (latestTypeData) {
+    Object.entries(latestTypeData).forEach(([type, data]) => {
       output.push([
-        group.keyword, // A: 검색키워드 (모든 행에 채움)
-        '',            // B: PC (공란)
-        '',            // C: M (공란)
-        topicKeyword,  // D: 주제키워드
-        content1,      // E: 콘텐츠영역
-        content2,      // F: 콘텐츠영역.1
-        content3       // G: 콘텐츠영역.2
+        type,
+        formatNumber(data.impressions),
+        formatNumber(data.clicks),
+        data.ctr.toFixed(2) + '%',
+        formatCurrency(data.cost),
+        formatCurrency(data.cpc)
       ]);
     });
-  });
+  }
+  output.push(['']);
 
-  return output;
+  // ═══════════════════════════════════════
+  // 거리별 성과 (최신 월)
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['🎯 타겟 반경별 성과 (' + latestMonth + ')']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['반경', '노출수', '클릭수', 'CTR', '비용', 'CPC']);
+  const latestDistData = analysis.byDistanceByMonth[latestMonth];
+  if (latestDistData) {
+    ['1km', '3km', '5km', '10km', '전국'].forEach(dist => {
+      const data = latestDistData[dist];
+      if (data && data.count > 0) {
+        output.push([
+          dist,
+          formatNumber(data.impressions),
+          formatNumber(data.clicks),
+          data.ctr.toFixed(2) + '%',
+          formatCurrency(data.cost),
+          formatCurrency(data.cpc)
+        ]);
+      }
+    });
+  }
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // Top 10 검색어 (CPC 효율 좋은 순)
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['⭐ Top 10 검색어 (CPC 효율 좋은 순, 클릭 10회↑, ' + latestMonth + ')']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['순위', '검색어', '캠페인유형', '클릭수', 'CPC', 'CTR', '비용']);
+  analysis.topSearchTerms.forEach((item, idx) => {
+    output.push([
+      idx + 1,
+      item.keyword,
+      item.type,
+      formatNumber(item.clicks),
+      formatCurrency(item.cpc),
+      item.ctr.toFixed(2) + '%',
+      formatCurrency(item.cost)
+    ]);
+  });
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // 비효율 검색어 (CPC 높은 순)
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['⚠️ 비효율 검색어 (CPC 높은 순, 클릭 10회↑, ' + latestMonth + ')']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['순위', '검색어', '캠페인유형', '클릭수', 'CPC', 'CTR', '비용']);
+  analysis.bottomSearchTerms.forEach((item, idx) => {
+    output.push([
+      idx + 1,
+      item.keyword,
+      item.type,
+      formatNumber(item.clicks),
+      formatCurrency(item.cpc),
+      item.ctr.toFixed(2) + '%',
+      formatCurrency(item.cost)
+    ]);
+  });
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // 캠페인유형별 CPC 비교
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['💰 캠페인유형별 CPC 효율 비교 (' + latestMonth + ')']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['유형', '클릭수', 'CPC', '총비용', '효율등급']);
+  if (latestTypeData) {
+    const typesByCpc = Object.entries(latestTypeData)
+      .filter(([k, v]) => v.clicks >= 10)
+      .sort((a, b) => a[1].cpc - b[1].cpc);
+
+    typesByCpc.forEach(([type, data], idx) => {
+      const grade = idx === 0 ? '🟢 최고' : idx === typesByCpc.length - 1 ? '🔴 개선필요' : '🟡 보통';
+      output.push([
+        type,
+        formatNumber(data.clicks),
+        formatCurrency(data.cpc),
+        formatCurrency(data.cost),
+        grade
+      ]);
+    });
+  }
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // 종합 제언
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['💡 종합 제언']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  if (recommendations.length === 0) {
+    output.push(['현재 특별한 제언 사항이 없습니다. 전반적으로 양호한 성과입니다.']);
+  } else {
+    recommendations.forEach((rec, idx) => {
+      output.push([`${idx + 1}. [${rec.category}]`]);
+      output.push([`   ${rec.content}`]);
+      output.push(['']);
+    });
+  }
+
+  // 데이터 출력
+  sheet.getRange(1, 1, output.length, 7).setValues(
+    output.map(row => {
+      while (row.length < 7) row.push('');
+      return row;
+    })
+  );
+
+  // 서식 적용
+  applyFormatting(sheet, output.length);
+}
+
+// 서식 적용
+function applyFormatting(sheet, rowCount) {
+  // 제목 스타일
+  sheet.getRange('A1').setFontSize(16).setFontWeight('bold');
+  sheet.getRange('A2').setFontSize(10).setFontColor('#666666');
+
+  // 구분선 스타일
+  const separatorRows = [];
+  const headerRows = [];
+
+  for (let i = 1; i <= rowCount; i++) {
+    const cell = sheet.getRange(i, 1);
+    const value = cell.getValue();
+
+    if (String(value).includes('═══')) {
+      separatorRows.push(i);
+      cell.setFontColor('#1a73e8');
+    }
+
+    if (String(value).includes('📌') || String(value).includes('📈') ||
+        String(value).includes('🎯') || String(value).includes('⭐') ||
+        String(value).includes('⚠️') || String(value).includes('💰') ||
+        String(value).includes('🔍') || String(value).includes('💡')) {
+      headerRows.push(i);
+      sheet.getRange(i, 1).setFontSize(12).setFontWeight('bold');
+    }
+  }
+
+  // 열 너비 조정
+  sheet.setColumnWidth(1, 150);
+  sheet.setColumnWidth(2, 200);
+  sheet.setColumnWidth(3, 100);
+  sheet.setColumnWidth(4, 100);
+  sheet.setColumnWidth(5, 80);
+  sheet.setColumnWidth(6, 80);
+  sheet.setColumnWidth(7, 120);
+}
+
+// ============================================
+// 유틸리티 함수
+// ============================================
+function formatNumber(num) {
+  if (!num) return '0';
+  return Math.round(num).toLocaleString('ko-KR');
+}
+
+function formatCurrency(num) {
+  if (!num) return '₩0';
+  return '₩' + Math.round(num).toLocaleString('ko-KR');
+}
+
+function formatChange(percent) {
+  if (!percent) return '-';
+  const sign = percent >= 0 ? '+' : '';
+  return sign + percent.toFixed(1) + '%';
+}
+
+function formatChangePoint(point) {
+  if (!point) return '-';
+  const sign = point >= 0 ? '+' : '';
+  return sign + point.toFixed(2) + '%p';
+}
+
+// 종합탭 초기화
+function clearSummarySheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('종합');
+  if (sheet) {
+    sheet.clear();
+    ss.toast('종합 탭이 초기화되었습니다.', '완료', 3);
+  }
+}
+
+// 월별탭 초기화
+function clearMonthlySheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('월별');
+  if (sheet) {
+    sheet.clear();
+    ss.toast('월별 탭이 초기화되었습니다.', '완료', 3);
+  }
+}
+
+// ============================================
+// 7. 월별 분석 결과 출력
+// ============================================
+function writeToMonthlySheet(ss, analysis) {
+  let sheet = ss.getSheetByName('월별');
+  if (!sheet) {
+    sheet = ss.insertSheet('월별');
+  }
+
+  sheet.clear();
+
+  const output = [];
+  const now = new Date();
+  const dateStr = Utilities.formatDate(now, 'Asia/Seoul', 'yyyy-MM-dd HH:mm');
+  const month = analysis.selectedMonth;
+  const prevMonth = analysis.prevMonth;
+
+  // 제목
+  output.push(['📅 ' + month + ' 네이버광고 상세 분석 리포트']);
+  output.push(['분석일시: ' + dateStr]);
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // 월간 요약
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['📌 ' + month + ' 요약']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  if (prevMonth && analysis.monthComparison) {
+    output.push(['지표', month, prevMonth, '증감']);
+    output.push(['총 노출수', formatNumber(analysis.summary.totalImpressions), formatNumber(analysis.prevSummary.totalImpressions), formatChange(analysis.monthComparison.impressionsChange)]);
+    output.push(['총 클릭수', formatNumber(analysis.summary.totalClicks), formatNumber(analysis.prevSummary.totalClicks), formatChange(analysis.monthComparison.clicksChange)]);
+    output.push(['총 비용', formatCurrency(analysis.summary.totalCost), formatCurrency(analysis.prevSummary.totalCost), formatChange(analysis.monthComparison.costChange)]);
+    output.push(['평균 CTR', analysis.summary.avgCtr.toFixed(2) + '%', analysis.prevSummary.avgCtr.toFixed(2) + '%', formatChangePoint(analysis.monthComparison.ctrChange)]);
+    output.push(['평균 CPC', formatCurrency(analysis.summary.avgCpc), formatCurrency(analysis.prevSummary.avgCpc), formatChange(analysis.monthComparison.cpcChange)]);
+  } else {
+    output.push(['지표', month]);
+    output.push(['총 노출수', formatNumber(analysis.summary.totalImpressions)]);
+    output.push(['총 클릭수', formatNumber(analysis.summary.totalClicks)]);
+    output.push(['총 비용', formatCurrency(analysis.summary.totalCost)]);
+    output.push(['평균 CTR', analysis.summary.avgCtr.toFixed(2) + '%']);
+    output.push(['평균 CPC', formatCurrency(analysis.summary.avgCpc)]);
+  }
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // 캠페인유형별 성과
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['📈 캠페인유형별 성과']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['유형', '노출수', '클릭수', 'CTR', '비용', 'CPC']);
+  if (analysis.byType) {
+    Object.entries(analysis.byType).forEach(([type, data]) => {
+      output.push([
+        type,
+        formatNumber(data.impressions),
+        formatNumber(data.clicks),
+        data.ctr.toFixed(2) + '%',
+        formatCurrency(data.cost),
+        formatCurrency(data.cpc)
+      ]);
+    });
+  }
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // 타겟 반경별 성과
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['🎯 타겟 반경별 성과']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['반경', '노출수', '클릭수', 'CTR', '비용', 'CPC']);
+  if (analysis.byDistance) {
+    ['1km', '3km', '5km', '10km', '전국'].forEach(dist => {
+      const data = analysis.byDistance[dist];
+      if (data && data.count > 0) {
+        output.push([
+          dist,
+          formatNumber(data.impressions),
+          formatNumber(data.clicks),
+          data.ctr.toFixed(2) + '%',
+          formatCurrency(data.cost),
+          formatCurrency(data.cpc)
+        ]);
+      }
+    });
+  }
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // Top 10 검색어 (CPC 효율 좋은 순)
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['⭐ Top 10 검색어 (CPC 효율 좋은 순, 클릭 10회↑)']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['순위', '검색어', '캠페인유형', '클릭수', 'CPC', 'CTR', '비용']);
+  analysis.topSearchTerms.forEach((item, idx) => {
+    output.push([
+      idx + 1,
+      item.keyword,
+      item.type,
+      formatNumber(item.clicks),
+      formatCurrency(item.cpc),
+      item.ctr.toFixed(2) + '%',
+      formatCurrency(item.cost)
+    ]);
+  });
+  output.push(['']);
+
+  // ═══════════════════════════════════════
+  // 비효율 검색어 (CPC 높은 순)
+  // ═══════════════════════════════════════
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['⚠️ 비효율 검색어 (CPC 높은 순, 클릭 10회↑)']);
+  output.push(['═══════════════════════════════════════════════════════════════']);
+  output.push(['']);
+
+  output.push(['순위', '검색어', '캠페인유형', '클릭수', 'CPC', 'CTR', '비용']);
+  analysis.bottomSearchTerms.forEach((item, idx) => {
+    output.push([
+      idx + 1,
+      item.keyword,
+      item.type,
+      formatNumber(item.clicks),
+      formatCurrency(item.cpc),
+      item.ctr.toFixed(2) + '%',
+      formatCurrency(item.cost)
+    ]);
+  });
+  output.push(['']);
+
+  // 데이터 출력
+  const maxCols = 7;
+  sheet.getRange(1, 1, output.length, maxCols).setValues(
+    output.map(row => {
+      while (row.length < maxCols) row.push('');
+      return row;
+    })
+  );
+
+  // 서식 적용
+  applyFormatting(sheet, output.length);
 }

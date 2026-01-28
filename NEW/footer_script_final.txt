@@ -1,0 +1,79 @@
+<script>
+(function() {
+    var footer = document.querySelector('.mobile-fix-footer');
+    if (!footer) return;
+
+    var layerBtn = document.querySelector('.jsLayerBtn');
+    var closeBtn = document.querySelector('.jsFixClose');
+    var closeBg = document.querySelector('.fix-layer-close-bg');
+    var mobileLayerBg = document.querySelector('.jsMobileLayerBG');
+
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    var scrollPos = 0;
+
+    // 초기 상태
+    footer.style.opacity = '0';
+    footer.style.pointerEvents = 'none';
+    footer.style.transition = 'opacity 0.3s ease';
+
+    function showFooter() {
+        footer.style.opacity = '1';
+        footer.style.pointerEvents = 'auto';
+    }
+
+    function hideFooter() {
+        footer.style.opacity = '0';
+        footer.style.pointerEvents = 'none';
+    }
+
+    function checkScroll() {
+        var mobileLayer = document.querySelector('.jsMobileLayer');
+        if (mobileLayer && mobileLayer.classList.contains('fixed')) {
+            hideFooter();
+            return;
+        }
+        var scrollY = window.pageYOffset || document.documentElement.scrollTop || 0;
+        if (scrollY > 300) {
+            showFooter();
+        } else {
+            hideFooter();
+        }
+    }
+
+    if (layerBtn) {
+        layerBtn.addEventListener('click', function() {
+            setTimeout(function() {
+                var mobileLayer = document.querySelector('.jsMobileLayer');
+                if (mobileLayer && mobileLayer.classList.contains('fixed')) {
+                    hideFooter();
+                    if (isIOS) {
+                        scrollPos = window.pageYOffset || document.documentElement.scrollTop || 0;
+                        document.body.style.position = 'fixed';
+                        document.body.style.top = -scrollPos + 'px';
+                        document.body.style.left = '0';
+                        document.body.style.right = '0';
+                    }
+                }
+            }, 300);
+        });
+    }
+
+    function closeLayer() {
+        if (isIOS && document.body.style.position === 'fixed') {
+            document.body.style.position = '';
+            document.body.style.top = '';
+            document.body.style.left = '';
+            document.body.style.right = '';
+            window.scrollTo(0, scrollPos);
+        }
+        setTimeout(checkScroll, 400);
+    }
+
+    if (closeBtn) closeBtn.addEventListener('click', closeLayer);
+    if (closeBg) closeBg.addEventListener('click', closeLayer);
+    if (mobileLayerBg) mobileLayerBg.addEventListener('click', closeLayer);
+
+    window.addEventListener('scroll', checkScroll, { passive: true });
+    checkScroll();
+})();
+</script>
