@@ -13,7 +13,10 @@
       "Bash(git commit -m \"$(cat <<''EOF''\n중복 제거, 숫자 콤마 형식, 진행 상황 표시 기능 추가\n\n- A~D열 중복 제거 기능 추가 (A열 키워드 기준)\n- 키워드 분류 시 PC/M 열에 숫자 콤마 형식 적용\n- 검색량 조회 시 토스트로 진행 상황 실시간 표시\n- 네이버 API 서명 방식 수정\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
       "Bash(copy:*)",
       "Bash(git commit:*)",
-      "Bash(clasp create:*)"
+      "Bash(clasp create:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(clasp:*)"
     ],
     "deny": [],
     "ask": []
