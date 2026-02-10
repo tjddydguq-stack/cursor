@@ -196,9 +196,17 @@ function groupByCategory(data) {
     });
   });
 
-  // M검색량 높은순 정렬
+  // 카페 O 우선 + M검색량 높은순 정렬
   Object.keys(grouped).forEach(category => {
     grouped[category].sort((a, b) => {
+      const cafeA = String(a.values[3]).trim().toUpperCase();
+      const cafeB = String(b.values[3]).trim().toUpperCase();
+
+      // 카페 O 우선 (O가 앞으로)
+      if (cafeA === 'O' && cafeB !== 'O') return -1;
+      if (cafeA !== 'O' && cafeB === 'O') return 1;
+
+      // 같은 카페 상태 내에서 M검색량 높은순
       const mA = parseFloat(String(a.values[2]).replace(/,/g, '')) || 0;
       const mB = parseFloat(String(b.values[2]).replace(/,/g, '')) || 0;
       return mB - mA;
@@ -278,7 +286,7 @@ function generateReport(groupedData, destinations) {
   });
 
   report += '\n총 ' + total + '개 키워드 분류됨';
-  report += '\n(서식/드롭다운 포함 복사됨)';
+  report += '\n(카페O 우선 + 검색량순 정렬, 서식/드롭다운 포함)';
 
   const unmapped = allCategories.filter(cat => !destinations[cat]);
   if (unmapped.length > 0) {
@@ -480,7 +488,7 @@ function 설정확인() {
   info += '소스 데이터: A~E열 (키워드, PC, M, 카페탭, 분류)\n';
   info += '데이터 시작 행: ' + CONFIG.SOURCE.START_ROW + '행\n';
   info += '헤더 스캔 행: ' + CONFIG.HEADER_SCAN_ROW + '행\n';
-  info += '정렬: M(모바일) 검색량 높은순\n\n';
+  info += '정렬: 카페O 우선 → M(모바일) 검색량 높은순\n\n';
   info += '[헤더에서 자동 감지된 분류 영역]\n';
 
   if (Object.keys(destinations).length === 0) {
@@ -506,7 +514,7 @@ function 도움말() {
 '=== 키워드 분류 도구 ===\n\n' +
 '[키워드 분류]\n' +
 'A~E열 데이터를 우측 분류 영역에 배치합니다.\n' +
-'M(모바일) 검색량 높은순으로 정렬됩니다.\n\n' +
+'카페O 우선, 그 안에서 M검색량 높은순 정렬됩니다.\n\n' +
 '[구조]\n' +
 '1행: 날짜/제목\n' +
 '2행: 헤더 (키워드, PC, M, 카페탭, 분류)\n' +
