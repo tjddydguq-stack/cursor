@@ -197,14 +197,21 @@ function groupByCategory(data) {
   });
 
   // 카페 O 우선 + M검색량 높은순 정렬
+  // 카페 O 여부 판별 함수 - 명시적으로 O만 체크
+  const isCafeO = (val) => {
+    const v = String(val).trim().toUpperCase();
+    // O, o, 0, ㅇ 중 하나면 true
+    return v === 'O' || v === '0' || v === 'ㅇ' || v.includes('O');
+  };
+
   Object.keys(grouped).forEach(category => {
     grouped[category].sort((a, b) => {
-      const cafeA = String(a.values[3]).trim().toUpperCase();
-      const cafeB = String(b.values[3]).trim().toUpperCase();
+      const isOA = isCafeO(a.values[3]);
+      const isOB = isCafeO(b.values[3]);
 
       // 카페 O 우선 (O가 앞으로)
-      if (cafeA === 'O' && cafeB !== 'O') return -1;
-      if (cafeA !== 'O' && cafeB === 'O') return 1;
+      if (isOA && !isOB) return -1;
+      if (!isOA && isOB) return 1;
 
       // 같은 카페 상태 내에서 M검색량 높은순
       const mA = parseFloat(String(a.values[2]).replace(/,/g, '')) || 0;
